@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Web Automation Recorder",
+  "version": "2.0",
+  "description": "Record web actions and automate with Selenium",
+  "permissions": ["storage", "activeTab", "scripting", "cookies", "tabs"],
+  "host_permissions": ["http://localhost:11434/*", "<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

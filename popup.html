@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <title>Web Automation Recorder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: Tahoma, Arial, sans-serif;
+      font-size: 13px;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      width: 420px;
+      min-height: 500px;
+    }
+
+    .header {
+      background: #16213e;
+      padding: 12px 16px;
+      border-bottom: 2px solid #0f3460;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header h1 {
+      font-size: 14px;
+      font-weight: bold;
+      color: #e94560;
+    }
+
+    .header .url-info {
+      font-size: 11px;
+      color: #888;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      background: transparent;
+      color: #888;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: Tahoma, Arial, sans-serif;
+      transition: all .2s;
+    }
+
+    .tab-btn.active {
+      color: #e94560;
+      border-bottom: 2px solid #e94560;
+      background: #1a1a2e;
+    }
+
+    .tab-content { display: none; padding: 14px; }
+    .tab-content.active { display: block; }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: Tahoma, Arial, sans-serif;
+      font-weight: bold;
+      transition: all .2s;
+    }
+
+    .btn-red    { background: #e94560; color: #fff; }
+    .btn-green  { background: #2ecc71; color: #1a1a2e; }
+    .btn-blue   { background: #3498db; color: #fff; }
+    .btn-gray   { background: #444; color: #ccc; }
+    .btn-orange { background: #e67e22; color: #fff; }
+
+    .btn:hover { opacity: .85; }
+    .btn:disabled { opacity: .4; cursor: default; }
+
+    .btn-sm { padding: 4px 10px; font-size: 11px; }
+
+    /* Record tab */
+    .info-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      background: #16213e;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .info-label { color: #888; min-width: 60px; }
+
+    .info-value {
+      flex: 1;
+      color: #e0e0e0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .record-controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .actions-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      color: #888;
+      font-size: 11px;
+    }
+
+    .actions-list {
+      max-height: 220px;
+      overflow-y: auto;
+      border: 1px solid #0f3460;
+      border-radius: 6px;
+      margin-bottom: 10px;
+    }
+
+    .action-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-bottom: 1px solid #0f3460;
+      font-size: 11px;
+    }
+
+    .action-item:last-child { border-bottom: none; }
+
+    .action-item:hover { background: #16213e; }
+
+    .action-badge {
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: bold;
+      min-width: 45px;
+      text-align: center;
+    }
+
+    .badge-click    { background: #3498db33; color: #3498db; }
+    .badge-input    { background: #2ecc7133; color: #2ecc71; }
+    .badge-keyboard { background: #9b59b633; color: #9b59b6; }
+    .badge-wait     { background: #e67e2233; color: #e67e22; }
+
+    .action-desc { flex: 1; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .action-value-input {
+      background: #0f3460;
+      border: 1px solid #1a5276;
+      color: #e0e0e0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      width: 100px;
+    }
+
+    .del-btn {
+      background: none;
+      border: none;
+      color: #e94560;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 4px;
+    }
+
+    /* Export section */
+    .export-section {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    /* Status */
+    .status {
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      margin-bottom: 10px;
+      display: none;
+    }
+
+    .status.ok   { background: #2ecc7122; color: #2ecc71; display: block; }
+    .status.err  { background: #e9456022; color: #e94560; display: block; }
+    .status.info { background: #3498db22; color: #3498db; display: block; }
+
+    /* AI tab */
+    .ai-textarea {
+      width: 100%;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      color: #e0e0e0;
+      padding: 10px;
+      border-radius: 6px;
+      font-family: Tahoma, Arial, sans-serif;
+      font-size: 12px;
+      resize: vertical;
+      min-height: 80px;
+      margin-bottom: 10px;
+    }
+
+    .ai-response {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 11px;
+      max-height: 200px;
+      overflow-y: auto;
+      margin: 10px 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: none;
+      color: #ccc;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #888;
+      border-top-color: #e94560;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #16213e; }
+    ::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 2px; }
+
+    .cookies-count {
+      background: #2ecc7133;
+      color: #2ecc71;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div style="color:#e94560;font-weight:bold;font-size:14px;">🤖 Automation Recorder</div>
+      <div class="url-info" id="headerUrl">در حال بارگذاری...</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="record">⏺ ضبط</button>
+    <button class="tab-btn" data-tab="ai">🧠 هوش مصنوعی</button>
+    <button class="tab-btn" data-tab="chat">💬 چت</button>
+  </div>
+
+  <!-- ─── RECORD TAB ─── -->
+  <div class="tab-content active" id="tab-record">
+
+    <div class="info-row">
+      <span class="info-label">URL:</span>
+      <span class="info-value" id="currentUrl">—</span>
+    </div>
+
+    <div class="info-row">
+      <span class="info-label">کوکی:</span>
+      <span class="info-value" id="cookieStatus">دریافت نشده</span>
+      <button class="btn btn-blue btn-sm" id="getCookiesBtn">دریافت کوکی</button>
+    </div>
+
+    <div class="record-controls">
+      <button class="btn btn-red" id="startRecBtn">▶ شروع ضبط</button>
+      <button class="btn btn-gray" id="stopRecBtn" disabled>⏹ توقف</button>
+      <button class="btn btn-gray btn-sm" id="clearActionsBtn">پاک کردن</button>
+    </div>
+
+    <div id="recStatus" class="status"></div>
+
+    <div class="actions-header">
+      <span>اکشن‌های ضبط شده: <strong id="actionsCount">0</strong></span>
+      <span style="color:#555;font-size:10px;">مقادیر {1},{2},... = متغیر اکسل</span>
+    </div>
+
+    <div class="actions-list" id="actionsList">
+      <div style="padding:20px;text-align:center;color:#555;">هنوز اکشنی ضبط نشده</div>
+    </div>
+
+    <div class="export-section">
+      <button class="btn btn-green" id="exportBtn" style="flex:1">💾 خروجی JSON</button>
+      <button class="btn btn-orange btn-sm" id="previewBtn">👁 پیش‌نمایش</button>
+    </div>
+
+  </div>
+
+  <!-- ─── AI TAB ─── -->
+  <div class="tab-content" id="tab-ai">
+
+    <div style="color:#888;font-size:11px;margin-bottom:8px;">
+      صفحه فعلی رو آنالیز می‌کنه و یک برنامه اتوماسیون پیشنهاد میده
+    </div>
+
+    <textarea
+      class="ai-textarea"
+      id="aiRequest"
+      placeholder="مثال: روی دکمه لاگین کلیک کن، نام کاربری و رمز عبور رو وارد کن و ارسال کن"
+    ></textarea>
+
+    <button class="btn btn-blue" id="aiAnalyzeBtn" style="width:100%">
+      🔍 آنالیز صفحه + تولید برنامه
+    </button>
+
+    <div id="aiStatus" class="status"></div>
+
+    <div class="ai-response" id="aiResponse"></div>
+
+    <div class="export-section" id="aiExportSection" style="display:none">
+      <button class="btn btn-green" id="aiExportBtn" style="flex:1">💾 خروجی JSON</button>
+    </div>
+
+  </div>
+
+  <!-- ─── CHAT TAB ─── -->
+  <div class="tab-content" id="tab-chat">
+    <div style="background:#16213e;border-radius:6px;padding:10px;max-height:280px;overflow-y:auto;margin-bottom:10px;font-size:12px;" id="chatHistory">
+      <div style="color:#555;text-align:center;padding:20px;">چت با مدل Ollama</div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <input type="text" id="chatInput" placeholder="پیام خود را بنویسید..."
+        style="flex:1;background:#16213e;border:1px solid #0f3460;color:#e0e0e0;padding:8px;border-radius:6px;font-family:Tahoma;font-size:12px;">
+      <button class="btn btn-blue" id="chatSendBtn">ارسال</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
