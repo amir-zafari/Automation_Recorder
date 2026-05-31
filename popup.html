@@ -322,6 +322,43 @@
       font-family: Tahoma, Arial, sans-serif;
     }
     .insert-btn:hover { border-color: #3498db; color: #3498db; background: #3498db11; }
+
+    /* ── Nested action items (inside then/else) ── */
+    .action-item-nested {
+      background: #12192e;
+      border-radius: 4px;
+      margin: 1px 0;
+    }
+
+    /* ── Condition sub-lists ── */
+    .cond-blocks {
+      margin: 0 8px 2px 28px;
+      border-left: 2px solid #0f3460;
+      padding-left: 6px;
+    }
+    .cond-branch { margin-bottom: 2px; }
+    .cond-sub {
+      padding: 2px 0 2px 4px;
+    }
+    .expand-btn {
+      background: #12192e;
+      border: 1px solid #1a3a5e;
+      color: #888;
+      cursor: pointer;
+      font-size: 10px;
+      padding: 3px 10px;
+      border-radius: 4px;
+      width: 100%;
+      text-align: right;
+      font-family: Tahoma, Arial, sans-serif;
+      margin: 1px 0;
+      transition: background .15s;
+    }
+    .expand-btn:hover { background: #1a2a4e; }
+
+    /* badge colours for new types */
+    .badge-view      { background: #8e44ad33; color: #9b59b6; }
+    .badge-condition { background: #f9ca2433; color: #f9ca24; }
   </style>
 </head>
 <body>

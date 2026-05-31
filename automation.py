@@ -293,6 +293,30 @@ def prompt_manual(label: str, headless: bool) -> str:
 
 # ─── Actions ─────────────────────────────────────────────────────────────────
 
+def _eval_condition(left: str, operator: str, right: str) -> bool:
+    """Evaluate a condition between two string values."""
+    try:
+        if operator == '==':           return left == right
+        if operator == '!=':           return left != right
+        if operator == 'contains':     return right in left
+        if operator == 'not_contains': return right not in left
+        if operator == 'starts_with':  return left.startswith(right)
+        if operator == 'ends_with':    return left.endswith(right)
+        # Numeric comparisons — fall back to string compare on ValueError
+        lf, rf = float(left), float(right)
+        if operator == '>':  return lf >  rf
+        if operator == '<':  return lf <  rf
+        if operator == '>=': return lf >= rf
+        if operator == '<=': return lf <= rf
+    except (ValueError, TypeError):
+        # If numeric conversion fails, treat > / < / >= / <= as string compare
+        if operator == '>':  return left >  right
+        if operator == '<':  return left <  right
+        if operator == '>=': return left >= right
+        if operator == '<=': return left <= right
+    return False
+
+
 def execute_action(driver, action: dict, variables: dict, delay: float, headless: bool):
     atype = action.get('type', '')
     desc  = action.get('description', '')
@@ -361,12 +385,51 @@ def execute_action(driver, action: dict, variables: dict, delay: float, headless
         print(f"    → wait: {secs}s")
         time.sleep(secs)
 
+    elif atype == 'view':
+        # Read text from an element and store it in the variables dict.
+        xpath    = action.get('xpath', '')
+        variable = action.get('variable', '')
+        if not xpath:
+            print(f"    ⚠ view: no xpath specified")
+        elif not variable:
+            print(f"    ⚠ view: no variable name specified")
+        else:
+            try:
+                el    = find_el(driver, xpath, timeout=10)
+                value = (el.text or el.get_attribute('value') or
+                         el.get_attribute('innerText') or '').strip()
+                variables[variable] = value
+                print(f"    → view: {variable} = {value!r}")
+            except TimeoutException:
+                print(f"    ⚠ view: element not found — {xpath}")
+                variables[variable] = ''
+
+    elif atype == 'condition':
+        left_raw  = action.get('left',  '')
+        operator  = action.get('operator', '==')
+        right_raw = action.get('right', '')
+
+        left  = replace_vars(left_raw,  variables)
+        right = replace_vars(right_raw, variables)
+
+        result = _eval_condition(left, operator, right)
+        branch = 'then' if result else 'else'
+        mark   = '✓ then' if result else '✗ else'
+        print(f"    → condition: {left!r} {operator} {right!r}  →  {mark}")
+
+        sub_actions = action.get(branch) or []
+        if sub_actions:
+            _exec_action_list(driver, sub_actions, variables, delay, headless)
+        else:
+            print(f"      (branch '{branch}' is empty — nothing to do)")
+
     else:
         print(f"    ⚠ Unknown action type: {atype}")
 
 
-def run_actions(driver, recipe: dict, variables: dict, delay: float, headless: bool):
-    for action in recipe.get('actions', []):
+def _exec_action_list(driver, actions: list, variables: dict, delay: float, headless: bool):
+    """Execute a flat list of actions (used for main list and condition branches)."""
+    for action in actions:
         try:
             execute_action(driver, action, variables, delay, headless)
         except TimeoutException:
@@ -375,6 +438,10 @@ def run_actions(driver, recipe: dict, variables: dict, delay: float, headless: b
         except NoSuchElementException:
             print(f"    ❌ Element not found on step {action.get('step', '?')}: "
                   f"{action.get('xpath', '')}")
+
+
+def run_actions(driver, recipe: dict, variables: dict, delay: float, headless: bool):
+    _exec_action_list(driver, recipe.get('actions', []), variables, delay, headless)
     print("  ✓ Run complete")
 
 

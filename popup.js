@@ -85,223 +85,308 @@ document.getElementById('clearActionsBtn').addEventListener('click', () => {
   });
 });
 
+// ─── Action type meta ────────────────────────────────────────────────────────
+const ACTION_TYPES  = ['click','input','keyboard','wait','navigate','manual','view','condition'];
+const ACTION_LABELS = {
+  click:'کلیک', input:'تایپ', keyboard:'کلید', wait:'انتظار',
+  navigate:'برو', manual:'دستی', view:'ویو', condition:'شرط',
+};
+const CONDITION_OPS = [
+  ['==','برابر است با'], ['!=','برابر نیست با'],
+  ['contains','شامل'], ['not_contains','شامل نیست'],
+  ['starts_with','شروع با'], ['ends_with','پایان با'],
+  ['>','بزرگتر از'], ['<','کوچکتر از'], ['>=','≥'], ['<=','≤'],
+];
+
 // ─── Refresh actions list from storage ───────────────────────────────────────
 function refreshActionsList() {
   chrome.storage.local.get(['recordedActions'], (result) => {
     const actions = result.recordedActions || [];
     document.getElementById('actionsCount').textContent = actions.length;
-    renderActions(actions);
+    const list = document.getElementById('actionsList');
+    const mainSave = (updated) =>
+      chrome.storage.local.set({ recordedActions: updated }, refreshActionsList);
+    renderActionsInto(list, actions, mainSave, 0);
   });
 }
 
-// ─── Action type meta ────────────────────────────────────────────────────────
-const ACTION_TYPES   = ['click', 'input', 'keyboard', 'wait', 'navigate', 'manual'];
-const ACTION_LABELS  = { click:'کلیک', input:'تایپ', keyboard:'کلید', wait:'انتظار', navigate:'برو', manual:'دستی' };
+// ─── Core recursive renderer ──────────────────────────────────────────────────
+// save(updatedArray) persists changes; nestLevel controls indent/styling.
+function renderActionsInto(container, actions, save, nestLevel) {
+  container.innerHTML = '';
 
-// ─── Render ───────────────────────────────────────────────────────────────────
-function renderActions(actions) {
-  const list = document.getElementById('actionsList');
-
-  if (actions.length === 0) {
-    list.innerHTML = '<div style="padding:20px;text-align:center;color:#555;">هنوز اکشنی ضبط نشده</div>';
+  if (!actions.length) {
+    if (nestLevel === 0)
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:#555;">هنوز اکشنی ضبط نشده</div>';
+    container.appendChild(mkInsBtn(0, actions, save));
     return;
   }
 
-  list.innerHTML = '';
-  list.appendChild(makeInsertBtn(0));
+  container.appendChild(mkInsBtn(0, actions, save));
 
   actions.forEach((action, idx) => {
-    const item = document.createElement('div');
-    item.className = 'action-item';
+    container.appendChild(mkActionRow(action, idx, actions, save, nestLevel));
 
-    // ── Move ↑↓ ──
-    const moveWrap = document.createElement('div');
-    moveWrap.style.cssText = 'display:flex;flex-direction:column;gap:1px;flex-shrink:0;';
-    const upBtn = document.createElement('button');
-    upBtn.className = 'move-btn';
-    upBtn.textContent = '▲';
-    upBtn.disabled = idx === 0;
-    upBtn.title = 'بالاتر';
-    upBtn.addEventListener('click', () => moveAction(idx, -1));
-    const dnBtn = document.createElement('button');
-    dnBtn.className = 'move-btn';
-    dnBtn.textContent = '▼';
-    dnBtn.disabled = idx === actions.length - 1;
-    dnBtn.title = 'پایین‌تر';
-    dnBtn.addEventListener('click', () => moveAction(idx, 1));
-    moveWrap.appendChild(upBtn);
-    moveWrap.appendChild(dnBtn);
-    item.appendChild(moveWrap);
+    // condition: render then/else sub-lists right below the row
+    if (action.type === 'condition')
+      container.appendChild(mkCondBlocks(action, idx, actions, save, nestLevel));
 
-    // ── Type selector ──
-    const typeSelect = document.createElement('select');
-    typeSelect.className = 'type-select';
-    ACTION_TYPES.forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t;
-      opt.textContent = ACTION_LABELS[t] || t;
-      if (t === action.type) opt.selected = true;
-      typeSelect.appendChild(opt);
+    container.appendChild(mkInsBtn(idx + 1, actions, save));
+  });
+}
+
+// ─── Action row ───────────────────────────────────────────────────────────────
+function mkActionRow(action, idx, actions, save, nestLevel) {
+  const item = document.createElement('div');
+  item.className = nestLevel > 0 ? 'action-item action-item-nested' : 'action-item';
+
+  // ↑↓ move
+  const moveWrap = document.createElement('div');
+  moveWrap.style.cssText = 'display:flex;flex-direction:column;gap:1px;flex-shrink:0;';
+  const mkMv = (txt, dir) => {
+    const b = document.createElement('button');
+    b.className = 'move-btn';
+    b.textContent = txt;
+    b.disabled = dir < 0 ? idx === 0 : idx === actions.length - 1;
+    b.title = dir < 0 ? 'بالاتر' : 'پایین‌تر';
+    b.addEventListener('click', () => {
+      const t = idx + dir;
+      if (t < 0 || t >= actions.length) return;
+      const a = [...actions];
+      [a[idx], a[t]] = [a[t], a[idx]];
+      save(a);
     });
-    typeSelect.addEventListener('change', () => changeActionType(idx, typeSelect.value));
-    item.appendChild(typeSelect);
+    return b;
+  };
+  moveWrap.appendChild(mkMv('▲', -1));
+  moveWrap.appendChild(mkMv('▼',  1));
+  item.appendChild(moveWrap);
 
-    // ── Description (editable) ──
+  // type selector
+  const tSel = document.createElement('select');
+  tSel.className = 'type-select';
+  ACTION_TYPES.forEach(t => {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = ACTION_LABELS[t] || t;
+    if (t === action.type) o.selected = true;
+    tSel.appendChild(o);
+  });
+  tSel.addEventListener('change', () => {
+    const a = [...actions];
+    a[idx] = applyTypeChange(a[idx], tSel.value);
+    save(a);
+  });
+  item.appendChild(tSel);
+
+  // description + value (condition uses its own layout)
+  if (action.type === 'condition') {
+    item.appendChild(mkCondHeader(action, idx, actions, save));
+  } else {
     const desc = document.createElement('input');
     desc.className = 'action-desc-input';
     desc.value = action.description || action.url || '';
     desc.placeholder = 'توضیح';
-    desc.title = action.xpath || action.url || '';
-    desc.addEventListener('change', () => updateActionField(idx, 'description', desc.value));
+    desc.title = action.xpath || '';
+    desc.addEventListener('change', () => {
+      const a = [...actions];
+      a[idx] = { ...a[idx], description: desc.value };
+      save(a);
+    });
     item.appendChild(desc);
 
-    // ── Value area (type-specific) ──
-    const valNode = buildValueArea(action, idx);
-    if (valNode) item.appendChild(valNode);
+    const val = mkValueArea(action, idx, actions, save);
+    if (val) item.appendChild(val);
+  }
 
-    // ── Delete ──
-    const delBtn = document.createElement('button');
-    delBtn.className = 'del-btn';
-    delBtn.textContent = '×';
-    delBtn.title = 'حذف';
-    delBtn.addEventListener('click', () => deleteAction(idx));
-    item.appendChild(delBtn);
+  // delete
+  const del = document.createElement('button');
+  del.className = 'del-btn';
+  del.textContent = '×';
+  del.title = 'حذف';
+  del.addEventListener('click', () => save(actions.filter((_, i) => i !== idx)));
+  item.appendChild(del);
 
-    list.appendChild(item);
-    list.appendChild(makeInsertBtn(idx + 1));
-  });
+  return item;
 }
 
-// Build the right input widget for each action type
-function buildValueArea(action, idx) {
+// ─── Value widget per type ────────────────────────────────────────────────────
+function mkValueArea(action, idx, actions, save) {
+  const upd = (field, val) => {
+    const a = [...actions];
+    a[idx] = { ...a[idx], [field]: val };
+    save(a);
+  };
+  const inp = (field, placeholder, style) => {
+    const el = document.createElement('input');
+    el.className = 'action-value-input';
+    el.value = action[field] || '';
+    el.placeholder = placeholder;
+    if (style) Object.assign(el.style, style);
+    el.addEventListener('change', () => upd(field, el.value));
+    return el;
+  };
+
   const t = action.type;
-
   if (t === 'wait') {
-    const inp = document.createElement('input');
-    inp.type = 'number';
-    inp.className = 'action-value-input';
-    inp.style.width = '58px';
-    inp.min = '0.1'; inp.step = '0.5';
-    inp.value = action.seconds != null ? action.seconds : 1;
-    inp.title = 'ثانیه';
-    inp.addEventListener('change', () =>
-      updateActionField(idx, 'seconds', parseFloat(inp.value) || 1));
-    return inp;
+    const el = document.createElement('input');
+    el.type = 'number'; el.className = 'action-value-input';
+    el.min = '0.1'; el.step = '0.5';
+    el.value = action.seconds != null ? action.seconds : 1;
+    el.title = 'ثانیه'; el.style.width = '58px';
+    el.addEventListener('change', () => upd('seconds', parseFloat(el.value) || 1));
+    return el;
   }
-
-  if (t === 'navigate') {
-    const inp = document.createElement('input');
-    inp.className = 'action-value-input';
-    inp.style.width = '110px';
-    inp.value = action.url || '';
-    inp.placeholder = 'https://...';
-    inp.addEventListener('change', () => updateActionField(idx, 'url', inp.value));
-    return inp;
-  }
-
+  if (t === 'navigate') return inp('url', 'https://...', { width: '110px' });
   if (t === 'keyboard') {
-    const inp = document.createElement('input');
-    inp.className = 'action-value-input';
-    inp.style.width = '72px';
-    inp.value = action.key || 'Enter';
-    inp.placeholder = 'Enter';
-    inp.title = 'کلید: Enter, Tab, Escape, …';
-    inp.addEventListener('change', () => updateActionField(idx, 'key', inp.value));
-    return inp;
+    const el = inp('key', 'Enter', { width: '72px' });
+    el.value = action.key || 'Enter';
+    el.title = 'Enter | Tab | Escape | F1…';
+    return el;
   }
-
-  if (t === 'input' || t === 'click') {
-    const inp = document.createElement('input');
-    inp.className = 'action-value-input';
-    inp.value = action.value || '';
-    inp.placeholder = t === 'click' ? 'متن (اختیاری)' : '{1} یا متن';
-    inp.title = '{1},{2} = متغیر اکسل';
-    inp.addEventListener('change', () => updateActionField(idx, 'value', inp.value));
-    return inp;
+  if (t === 'input' || t === 'click')
+    return inp('value', t === 'click' ? 'متن (اختیاری)' : '{1} یا متن');
+  if (t === 'view') {
+    const el = inp('variable', '{view1}', { width: '82px' });
+    el.value = action.variable || '{view1}';
+    el.title = 'نام متغیر — در شرط‌ها استفاده می‌شود';
+    return el;
   }
-
   if (t === 'manual') {
     const chip = document.createElement('span');
     chip.style.cssText = 'background:#e67e2233;color:#e67e22;padding:2px 8px;border-radius:4px;font-size:10px;white-space:nowrap;flex-shrink:0;';
     chip.textContent = action.captcha ? 'کپچا' : '{ASK}';
     return chip;
   }
-
   return null;
 }
 
-// Small "+" row inserted between action items
-function makeInsertBtn(atIndex) {
+// ─── Condition header (inline if/op/value row) ────────────────────────────────
+function mkCondHeader(action, idx, actions, save) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;align-items:center;gap:3px;flex:1;min-width:0;flex-wrap:wrap;';
+
+  const lbl = document.createElement('span');
+  lbl.style.cssText = 'color:#f9ca24;font-size:10px;white-space:nowrap;flex-shrink:0;';
+  lbl.textContent = 'اگر:';
+  wrap.appendChild(lbl);
+
+  const mkCI = (field, ph, w) => {
+    const el = document.createElement('input');
+    el.className = 'action-value-input';
+    el.style.width = w; el.value = action[field] || ''; el.placeholder = ph;
+    el.addEventListener('change', () => {
+      const a = [...actions]; a[idx] = { ...a[idx], [field]: el.value }; save(a);
+    });
+    return el;
+  };
+
+  wrap.appendChild(mkCI('left', '{view1}', '68px'));
+
+  const opSel = document.createElement('select');
+  opSel.className = 'type-select'; opSel.style.width = '100px';
+  CONDITION_OPS.forEach(([v, label]) => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = label;
+    if (v === (action.operator || '==')) o.selected = true;
+    opSel.appendChild(o);
+  });
+  opSel.addEventListener('change', () => {
+    const a = [...actions]; a[idx] = { ...a[idx], operator: opSel.value }; save(a);
+  });
+  wrap.appendChild(opSel);
+
+  wrap.appendChild(mkCI('right', 'مقدار', '68px'));
+  return wrap;
+}
+
+// ─── Condition then/else expandable sub-lists ─────────────────────────────────
+function mkCondBlocks(action, idx, actions, save, nestLevel) {
+  const outer = document.createElement('div');
+  outer.className = 'cond-blocks';
+
+  ['then', 'else'].forEach(branch => {
+    const isElse   = branch === 'else';
+    const color    = isElse ? '#e94560' : '#2ecc71';
+    const labelTxt = isElse ? 'وگرنه' : 'آنگاه';
+
+    const block = document.createElement('div');
+    block.className = 'cond-branch';
+
+    const subActs = action[branch] || [];
+
+    const toggle = document.createElement('button');
+    toggle.className = 'expand-btn';
+    toggle.style.color = color;
+    toggle.style.borderColor = color + '55';
+
+    const subWrap = document.createElement('div');
+    subWrap.className = 'cond-sub';
+    subWrap.style.display = 'none';
+
+    const makeSave = () => (updatedSub) => {
+      const a = [...actions];
+      a[idx] = { ...a[idx], [branch]: updatedSub };
+      save(a);                                  // persists to storage & re-renders parent
+    };
+
+    const refreshToggleLabel = (count) => {
+      const open = subWrap.style.display !== 'none';
+      toggle.textContent = `${open ? '▼' : '▶'} ${labelTxt} (${count} اکشن)`;
+    };
+
+    // Initial render
+    renderActionsInto(subWrap, subActs, makeSave(), nestLevel + 1);
+    refreshToggleLabel(subActs.length);
+
+    toggle.addEventListener('click', () => {
+      const nowOpen = subWrap.style.display !== 'none';
+      subWrap.style.display = nowOpen ? 'none' : 'block';
+      // count current sub-actions from saved data
+      chrome.storage.local.get(['recordedActions'], (r) => {
+        const root = r.recordedActions || [];
+        const cur  = (root[idx] || {})[branch] || [];
+        refreshToggleLabel(cur.length);
+      });
+    });
+
+    block.appendChild(toggle);
+    block.appendChild(subWrap);
+    outer.appendChild(block);
+  });
+
+  return outer;
+}
+
+// ─── Insert button ────────────────────────────────────────────────────────────
+function mkInsBtn(atIdx, actions, save) {
   const row = document.createElement('div');
   row.className = 'insert-row';
   const btn = document.createElement('button');
   btn.className = 'insert-btn';
   btn.textContent = '+ اکشن جدید';
-  btn.title = `اضافه کردن اکشن در موقعیت ${atIndex + 1}`;
-  btn.addEventListener('click', () => insertAction(atIndex));
+  btn.addEventListener('click', () => {
+    const a = [...actions];
+    a.splice(atIdx, 0, { type: 'wait', seconds: 1, description: 'انتظار' });
+    save(a);
+  });
   row.appendChild(btn);
   return row;
 }
 
-// ─── Mutation helpers ─────────────────────────────────────────────────────────
-function insertAction(atIndex) {
-  chrome.storage.local.get(['recordedActions'], (result) => {
-    const actions = result.recordedActions || [];
-    actions.splice(atIndex, 0, {
-      type: 'wait',
-      seconds: 1,
-      description: 'انتظار',
-    });
-    chrome.storage.local.set({ recordedActions: actions }, refreshActionsList);
-  });
-}
-
-function moveAction(idx, dir) {
-  chrome.storage.local.get(['recordedActions'], (result) => {
-    const actions = result.recordedActions || [];
-    const target = idx + dir;
-    if (target < 0 || target >= actions.length) return;
-    [actions[idx], actions[target]] = [actions[target], actions[idx]];
-    chrome.storage.local.set({ recordedActions: actions }, refreshActionsList);
-  });
-}
-
-function changeActionType(idx, newType) {
-  chrome.storage.local.get(['recordedActions'], (result) => {
-    const actions = result.recordedActions || [];
-    if (!actions[idx]) return;
-    const old = actions[idx];
-    const updated = {
-      type: newType,
-      xpath: old.xpath || '',
-      description: old.description || '',
-    };
-    if (newType === 'wait')     updated.seconds  = old.seconds  || 1;
-    if (newType === 'keyboard') updated.key      = old.key      || 'Enter';
-    if (newType === 'navigate') updated.url      = old.url      || '';
-    if (newType === 'input' || newType === 'click') updated.value = old.value || '';
-    if (newType === 'manual')   updated.value    = '{ASK}';
-    actions[idx] = updated;
-    chrome.storage.local.set({ recordedActions: actions }, refreshActionsList);
-  });
-}
-
-function updateActionField(idx, field, value) {
-  chrome.storage.local.get(['recordedActions'], (result) => {
-    const actions = result.recordedActions || [];
-    if (actions[idx]) {
-      actions[idx][field] = value;
-      chrome.storage.local.set({ recordedActions: actions });
-    }
-  });
-}
-
-function deleteAction(idx) {
-  chrome.storage.local.get(['recordedActions'], (result) => {
-    const actions = result.recordedActions || [];
-    actions.splice(idx, 1);
-    chrome.storage.local.set({ recordedActions: actions }, refreshActionsList);
-  });
+// ─── Type change defaults ─────────────────────────────────────────────────────
+function applyTypeChange(old, newType) {
+  const u = { type: newType, xpath: old.xpath || '', description: old.description || '' };
+  if (newType === 'wait')      u.seconds  = old.seconds  || 1;
+  if (newType === 'keyboard')  u.key      = old.key      || 'Enter';
+  if (newType === 'navigate')  u.url      = old.url      || '';
+  if (newType === 'input' || newType === 'click') u.value = old.value || '';
+  if (newType === 'manual')    u.value    = '{ASK}';
+  if (newType === 'view')      u.variable = old.variable || '{view1}';
+  if (newType === 'condition') {
+    u.left = old.left || ''; u.operator = old.operator || '=='; u.right = old.right || '';
+    u.then = old.then || []; u.else = old.else || [];
+  }
+  return u;
 }
 
 // ─── Export JSON (Record mode) ────────────────────────────────────────────────
