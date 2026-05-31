@@ -4,6 +4,14 @@ Usage:
     python automation.py --recipe recipe.json --excel data.xlsx
     python automation.py --recipe recipe.json --count 5
     python automation.py --recipe recipe.json --excel data.xlsx --count 3 --headless
+
+Highlights:
+  * One browser window is reused for every run (no re-login each row).
+  * Cookies + localStorage + sessionStorage from the recording are restored,
+    so a logged-in session is recreated.
+  * CAPTCHA / manual fields pause and ask you to type the value in the terminal
+    (read it from the open browser window).
+  * Clicks are resilient: JS-ancestor fallback + waits for late-rendered pages.
 """
 
 import json
@@ -11,6 +19,15 @@ import time
 import argparse
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
+
+# Force UTF-8 console output so Persian text + emoji never crash on a Windows
+# code page (cp1252). 'replace' degrades gracefully instead of raising.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 try:
     import pandas as pd
@@ -23,10 +40,12 @@ try:
     from selenium.webdriver.common.by import By
     from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.common.action_chains import ActionChains
-    from selenium.webdriver.support.ui import WebDriverWait, Select
+    from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.chrome.options import Options
-    from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+    from selenium.common.exceptions import (
+        TimeoutException, NoSuchElementException, WebDriverException,
+    )
 except ImportError:
     print("ERROR: selenium not installed. Run: pip install selenium")
     sys.exit(1)
@@ -49,6 +68,15 @@ KEY_MAP = {
     'F1':  Keys.F1,  'F2': Keys.F2,  'F5': Keys.F5,
 }
 
+# Value tokens that mean "ask the human at runtime" (e.g. a CAPTCHA).
+ASK_TOKENS = ('{ASK}', '{MANUAL}', '{?}')
+
+# Substrings that suggest a field is a CAPTCHA / human-verification field.
+CAPTCHA_HINTS = (
+    'captcha', 'کد امنیتی', 'کد تصویر', 'security code', 'verification',
+    'verify code', 'کد تایید', 'کد تأیید', 'robot',
+)
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def load_recipe(path: str) -> dict:
@@ -56,7 +84,7 @@ def load_recipe(path: str) -> dict:
         return json.load(f)
 
 
-def load_excel(path: str, sheet=0) -> list[dict]:
+def load_excel(path: str, sheet=0):
     df = pd.read_excel(path, sheet_name=sheet)
     return df.to_dict('records'), list(df.columns)
 
@@ -70,70 +98,188 @@ def build_variables(row: dict, columns: list) -> dict:
 
 
 def replace_vars(text: str, variables: dict) -> str:
+    if not text:
+        return text
     for var, val in variables.items():
         text = text.replace(var, val)
     return text
+
+
+def wants_manual(value: str) -> bool:
+    return bool(value) and any(tok in value for tok in ASK_TOKENS)
+
+
+def is_captcha_action(action: dict) -> bool:
+    """Heuristic: does this action target a CAPTCHA-like field?"""
+    if action.get('captcha') is True or action.get('manual') is True:
+        return True
+    blob = ' '.join(str(action.get(k, '')) for k in ('xpath', 'description', 'id', 'name')).lower()
+    return any(h in blob for h in CAPTCHA_HINTS)
 
 
 def make_driver(headless: bool) -> webdriver.Chrome:
     opts = Options()
     if headless:
         opts.add_argument('--headless=new')
-        opts.add_argument('--window-size=1280,900')
+    opts.add_argument('--window-size=1280,900')
     opts.add_argument('--no-sandbox')
     opts.add_argument('--disable-dev-shm-usage')
     opts.add_argument('--disable-blink-features=AutomationControlled')
     opts.add_experimental_option('excludeSwitches', ['enable-automation'])
+    # Keep the window open after the script ends (we close it ourselves).
+    opts.add_experimental_option('detach', True)
     return webdriver.Chrome(options=opts)
 
 
-def set_cookies(driver: webdriver.Chrome, cookies: list, url: str):
-    """Navigate to URL and inject cookies, then refresh."""
-    driver.get(url)
-    time.sleep(1.5)
+def wait_page_ready(driver, timeout: int = 20):
+    try:
+        WebDriverWait(driver, timeout).until(
+            lambda d: d.execute_script('return document.readyState') == 'complete'
+        )
+    except TimeoutException:
+        pass  # SPAs may never report 'complete'; carry on.
 
+
+def origin_of(url: str) -> str:
+    p = urlsplit(url)
+    return f'{p.scheme}://{p.netloc}'
+
+
+# ─── Session restore (cookies + storage) ─────────────────────────────────────
+
+def set_cookies(driver, cookies: list, url: str):
+    driver.get(url)
+    wait_page_ready(driver)
+    time.sleep(1)
     for cookie in cookies:
         clean = {}
         for key in ('name', 'value', 'domain', 'path', 'secure', 'httpOnly', 'expiry'):
             if key in cookie and cookie[key] is not None:
                 clean[key] = cookie[key]
-        # Selenium requires 'httpOnly' capitalization
         if 'httpOnly' in clean:
             clean['httpOnly'] = bool(clean['httpOnly'])
+        # A leading-dot domain mismatch is the usual cause of add_cookie errors;
+        # drop the domain and let Selenium attach it to the current host.
         try:
             driver.add_cookie(clean)
-        except Exception as e:
-            print(f"    ⚠ Cookie '{cookie.get('name')}' skipped: {e}")
+        except Exception:
+            clean.pop('domain', None)
+            try:
+                driver.add_cookie(clean)
+            except Exception as e:
+                print(f"    ⚠ Cookie '{cookie.get('name')}' skipped: {e}")
 
-    driver.refresh()
-    time.sleep(1.5)
+
+def set_storage(driver, storage_entries: list):
+    """Restore localStorage / sessionStorage for each captured origin."""
+    for entry in storage_entries:
+        origin = entry.get('origin')
+        if not origin:
+            continue
+        try:
+            if origin_of(driver.current_url) != origin:
+                driver.get(origin)
+                wait_page_ready(driver)
+        except WebDriverException:
+            driver.get(origin)
+            wait_page_ready(driver)
+        for store, key in (('local', 'localStorage'), ('session', 'sessionStorage')):
+            for k, v in (entry.get(store) or {}).items():
+                try:
+                    driver.execute_script(
+                        f"window.{key}.setItem(arguments[0], arguments[1]);", k, v
+                    )
+                except WebDriverException as e:
+                    print(f"    ⚠ {key} '{k}' skipped: {e}")
 
 
-def find_el(driver: webdriver.Chrome, xpath: str, timeout: int = 10):
+def apply_session(driver, recipe: dict):
+    """Recreate the logged-in session once, before any run."""
+    url      = recipe.get('url', '')
+    cookies  = recipe.get('cookies', []) or []
+    storage  = recipe.get('storage', []) or []
+
+    if not url and storage:
+        url = storage[0].get('origin', '')
+
+    if cookies:
+        print(f"  🍪 Restoring {len(cookies)} cookie(s)")
+        set_cookies(driver, cookies, url)
+    elif url:
+        print(f"  🌐 Opening {url}")
+        driver.get(url)
+        wait_page_ready(driver)
+
+    if storage:
+        n = sum(len(e.get('local') or {}) + len(e.get('session') or {}) for e in storage)
+        print(f"  💾 Restoring {n} storage item(s)")
+        set_storage(driver, storage)
+
+    if url:
+        driver.get(url)            # reload so the app picks up cookies + tokens
+        wait_page_ready(driver)
+    time.sleep(1)
+
+
+# ─── Element interaction ─────────────────────────────────────────────────────
+
+def find_el(driver, xpath: str, timeout: int = 15):
     return WebDriverWait(driver, timeout).until(
         EC.presence_of_element_located((By.XPATH, xpath))
     )
 
 
-def type_into_element(driver: webdriver.Chrome, el, value: str, is_contenteditable: bool = False):
-    """تایپ در فیلد — هم input معمولی هم contenteditable (مثل ChatGPT)."""
-    # تشخیص contenteditable از attribute
+def robust_click(driver, el):
+    """Click reliably: scroll into view, normal click, then JS-ancestor fallback."""
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+    time.sleep(0.2)
+    try:
+        el.click()
+        return
+    except WebDriverException:
+        pass
+    # Fallback: click the nearest real clickable ancestor (button/a) via JS —
+    # this rescues recordings that targeted an <svg>/icon inside a button.
+    driver.execute_script(
+        "var t=arguments[0];"
+        "var c=t.closest('button,a,[role=button],input[type=submit],input[type=button]');"
+        "(c||t).click();", el
+    )
+
+
+def type_into_element(driver, el, value: str, is_contenteditable: bool = False):
+    """Type into a normal input OR a contenteditable (ChatGPT/Gmail/Notion)."""
     ce = el.get_attribute('contenteditable')
     if is_contenteditable or ce in ('true', ''):
-        # پاک کردن و تایپ در contenteditable
         el.click()
         time.sleep(0.2)
-        el.send_keys(Keys.CONTROL + 'a')
+        el.send_keys(Keys.CONTROL, 'a')
         time.sleep(0.1)
         el.send_keys(Keys.DELETE)
         time.sleep(0.1)
         el.send_keys(value)
     else:
-        el.clear()
+        try:
+            el.clear()
+        except WebDriverException:
+            pass
         el.send_keys(value)
 
 
-def execute_action(driver: webdriver.Chrome, action: dict, variables: dict, delay: float):
+def prompt_manual(label: str, headless: bool) -> str:
+    """Ask the human to type a value (e.g. CAPTCHA) read from the browser."""
+    if headless:
+        print("    ⚠ Manual/CAPTCHA field needs a visible browser — run WITHOUT --headless.")
+    print(f"    ⏸  MANUAL INPUT — {label}")
+    try:
+        return input("       👉 Read it from the browser and type it here, then Enter: ").strip()
+    except EOFError:
+        return ''
+
+
+# ─── Actions ─────────────────────────────────────────────────────────────────
+
+def execute_action(driver, action: dict, variables: dict, delay: float, headless: bool):
     atype = action.get('type', '')
     desc  = action.get('description', '')
 
@@ -141,28 +287,42 @@ def execute_action(driver: webdriver.Chrome, action: dict, variables: dict, dela
         url = replace_vars(action.get('url', ''), variables)
         print(f"    → navigate: {url}")
         driver.get(url)
+        wait_page_ready(driver)
         time.sleep(delay * 2)
+
+    elif atype == 'manual':
+        xpath = action.get('xpath')
+        value = prompt_manual(desc or 'value', headless)
+        if xpath and value:
+            el = find_el(driver, xpath)
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            type_into_element(driver, el, value, action.get('isContentEditable', False))
+        time.sleep(delay)
 
     elif atype == 'click':
         xpath = action['xpath']
-        value_raw = action.get('value', '')
-        value = replace_vars(value_raw, variables) if value_raw else ''
-        print(f"    → click: {desc or xpath[:50]}" + (f" + type: '{value}'" if value else ''))
+        value = replace_vars(action.get('value', ''), variables)
+        print(f"    → click: {desc or xpath[:50]}" + (f" + type" if value else ''))
         el = find_el(driver, xpath)
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        time.sleep(0.2)
-        el.click()
+        robust_click(driver, el)
         time.sleep(0.3)
-        # اگه value داشت، بعد از کلیک تایپ میکنه (مثل ChatGPT textarea)
-        if value:
+        if value:  # ChatGPT-style: click then type into the same element
+            if wants_manual(value):
+                value = prompt_manual(desc or 'value', headless)
             type_into_element(driver, el, value, action.get('isContentEditable', False))
         time.sleep(delay)
 
     elif atype == 'input':
         xpath = action['xpath']
-        raw_value = action.get('value', '')
-        value = replace_vars(raw_value, variables)
-        print(f"    → input: {desc or xpath[:40]} = '{value}'")
+        value = replace_vars(action.get('value', ''), variables)
+        # CAPTCHA / manual fields: never replay a stale value — ask the human.
+        if wants_manual(value) or is_captcha_action(action):
+            value = prompt_manual(desc or xpath[:40], headless)
+        else:
+            print(f"    → input: {desc or xpath[:40]} = '{value}'")
+        if value == '':
+            time.sleep(delay)
+            return
         el = find_el(driver, xpath)
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
         type_into_element(driver, el, value, action.get('isContentEditable', False))
@@ -175,8 +335,7 @@ def execute_action(driver: webdriver.Chrome, action: dict, variables: dict, dela
         print(f"    → keyboard: {key_name}")
         if xpath:
             try:
-                el = find_el(driver, xpath, timeout=5)
-                el.send_keys(key)
+                find_el(driver, xpath, timeout=5).send_keys(key)
             except TimeoutException:
                 ActionChains(driver).send_keys(key).perform()
         else:
@@ -192,35 +351,17 @@ def execute_action(driver: webdriver.Chrome, action: dict, variables: dict, dela
         print(f"    ⚠ Unknown action type: {atype}")
 
 
-def run_once(recipe: dict, variables: dict, headless: bool, delay: float):
-    driver = make_driver(headless)
-    try:
-        url     = recipe.get('url', '')
-        cookies = recipe.get('cookies', [])
-        actions = recipe.get('actions', [])
-
-        if cookies:
-            print(f"  🍪 Setting {len(cookies)} cookies on {url}")
-            set_cookies(driver, cookies, url)
-        elif url:
-            print(f"  🌐 Navigating to {url}")
-            driver.get(url)
-            time.sleep(1.5)
-
-        for action in actions:
-            execute_action(driver, action, variables, delay)
-
-        print("  ✓ Run complete")
-        time.sleep(1)
-
-    except TimeoutException as e:
-        print(f"  ❌ Timeout: {e}")
-    except NoSuchElementException as e:
-        print(f"  ❌ Element not found: {e}")
-    except WebDriverException as e:
-        print(f"  ❌ WebDriver error: {e}")
-    finally:
-        driver.quit()
+def run_actions(driver, recipe: dict, variables: dict, delay: float, headless: bool):
+    for action in recipe.get('actions', []):
+        try:
+            execute_action(driver, action, variables, delay, headless)
+        except TimeoutException:
+            print(f"    ❌ Timeout on step {action.get('step', '?')} "
+                  f"({action.get('type')}): element not found — {action.get('xpath', '')}")
+        except NoSuchElementException:
+            print(f"    ❌ Element not found on step {action.get('step', '?')}: "
+                  f"{action.get('xpath', '')}")
+    print("  ✓ Run complete")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -243,9 +384,11 @@ Examples:
     parser.add_argument('--count',    type=int,            help='Max number of runs (default: all Excel rows or 1)')
     parser.add_argument('--headless', action='store_true', help='Run browser in headless mode (no window)')
     parser.add_argument('--delay',    type=float, default=0.4, help='Delay between actions in seconds (default: 0.4)')
+    parser.add_argument('--keep-open', action='store_true', help='Leave the browser open after finishing')
+    parser.add_argument('--fresh-session', action='store_true',
+                        help='Re-apply cookies/storage before every run (default: only once)')
     args = parser.parse_args()
 
-    # Validate recipe
     recipe_path = Path(args.recipe)
     if not recipe_path.exists():
         print(f"ERROR: Recipe file not found: {args.recipe}")
@@ -256,42 +399,64 @@ Examples:
     print(f"   URL: {recipe.get('url', '—')}")
     print(f"   Actions: {len(recipe.get('actions', []))}")
     print(f"   Variables: {recipe.get('variables', [])}")
-    print(f"   Cookies: {len(recipe.get('cookies', []))}")
+    print(f"   Cookies: {len(recipe.get('cookies', []) or [])}")
+    print(f"   Storage origins: {len(recipe.get('storage', []) or [])}")
 
-    # Excel mode
+    # Build the list of variable-sets, one per run.
     if args.excel:
         excel_path = Path(args.excel)
         if not excel_path.exists():
             print(f"ERROR: Excel file not found: {args.excel}")
             sys.exit(1)
-
         rows, columns = load_excel(args.excel, args.sheet)
         print(f"\n📊 Excel loaded: {excel_path.name}")
         print(f"   Rows: {len(rows)} | Columns: {columns}")
-
         if args.count:
             rows = rows[:args.count]
-
-        print(f"\n🚀 Starting {len(rows)} run(s)...\n")
-
-        for i, row in enumerate(rows):
-            variables = build_variables(row, columns)
-            print(f"Run {i + 1}/{len(rows)}: {dict(list(variables.items())[:3])}")
-            run_once(recipe, variables, args.headless, args.delay)
-            if i < len(rows) - 1:
-                time.sleep(0.5)
-
-    # No Excel - fixed count
+        run_vars = [build_variables(r, columns) for r in rows]
     else:
         count = args.count or 1
-        print(f"\n🚀 Starting {count} run(s) (no Excel)...\n")
-        for i in range(count):
-            print(f"Run {i + 1}/{count}:")
-            run_once(recipe, {}, args.headless, args.delay)
-            if i < count - 1:
-                time.sleep(0.5)
+        run_vars = [{} for _ in range(count)]
 
-    print("\n✅ All runs finished.")
+    if not run_vars:
+        print("Nothing to run.")
+        return
+
+    print(f"\n🚀 Starting {len(run_vars)} run(s) — single shared browser...\n")
+
+    driver = make_driver(args.headless)
+    try:
+        # Recreate the logged-in session ONCE, then reuse it for every run.
+        apply_session(driver, recipe)
+        loop_url = recipe.get('url', '')
+
+        for i, variables in enumerate(run_vars):
+            preview = dict(list(variables.items())[:3]) if variables else '(no variables)'
+            print(f"Run {i + 1}/{len(run_vars)}: {preview}")
+
+            if i > 0:
+                if args.fresh_session:
+                    apply_session(driver, recipe)
+                elif loop_url:
+                    driver.get(loop_url)     # back to the start page for the next row
+                    wait_page_ready(driver)
+                    time.sleep(0.5)
+
+            run_actions(driver, recipe, variables, args.delay, args.headless)
+            time.sleep(0.5)
+
+        print("\n✅ All runs finished.")
+
+    except WebDriverException as e:
+        print(f"\n❌ WebDriver error: {e}")
+    finally:
+        if args.keep_open:
+            print("\n🪟 Browser left open (--keep-open). Press Enter here to close it...")
+            try:
+                input()
+            except EOFError:
+                pass
+        driver.quit()
 
 
 if __name__ == '__main__':

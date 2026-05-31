@@ -40,8 +40,9 @@ document.getElementById('getCookiesBtn').addEventListener('click', () => {
     capturedCookies = res?.cookies || [];
     capturedUrl = res?.url || capturedUrl;
     const el = document.getElementById('cookieStatus');
-    if (capturedCookies.length > 0) {
-      el.innerHTML = `<span class="cookies-count">✓ ${capturedCookies.length} کوکی</span>`;
+    const sc = res?.storageCount || 0;
+    if (capturedCookies.length > 0 || sc > 0) {
+      el.innerHTML = `<span class="cookies-count">✓ ${capturedCookies.length} کوکی + ${sc} سشن</span>`;
     } else {
       el.textContent = 'کوکی پیدا نشد';
     }
@@ -65,13 +66,14 @@ document.getElementById('startRecBtn').addEventListener('click', () => {
 
 // ─── Stop Recording ───────────────────────────────────────────────────────────
 document.getElementById('stopRecBtn').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'stopRecording' }, () => {
+  chrome.runtime.sendMessage({ action: 'stopRecording' }, (res) => {
     isRecording = false;
     stopPolling();
     document.getElementById('startRecBtn').disabled = false;
     document.getElementById('stopRecBtn').disabled = true;
     refreshActionsList();
-    showStatus('recStatus', '✓ ضبط متوقف شد', 'ok');
+    const c = res?.cookies || 0, s = res?.storageCount || 0;
+    showStatus('recStatus', `✓ ضبط متوقف شد — ${c} کوکی و ${s} آیتم سشن ذخیره شد`, 'ok');
   });
 });
 
@@ -107,12 +109,13 @@ function renderActions(actions) {
 
     const badge = document.createElement('span');
     badge.className = `action-badge badge-${action.type}`;
-    badge.textContent = action.type === 'keyboard' ? '⌨ key' : action.type;
+    const badgeText = { keyboard: '⌨ key', manual: '⏸ دستی', navigate: '↪ برو' };
+    badge.textContent = badgeText[action.type] || action.type;
 
     const desc = document.createElement('span');
     desc.className = 'action-desc';
-    desc.title = action.xpath || '';
-    desc.textContent = action.description || action.xpath?.substring(0, 30) || '';
+    desc.title = action.xpath || action.url || '';
+    desc.textContent = action.description || action.url || action.xpath?.substring(0, 30) || '';
 
     item.appendChild(badge);
     item.appendChild(desc);
@@ -133,6 +136,11 @@ function renderActions(actions) {
       keySpan.style.cssText = 'background:#9b59b633;color:#9b59b6;padding:2px 8px;border-radius:4px;font-size:10px;';
       keySpan.textContent = action.key;
       item.appendChild(keySpan);
+    } else if (action.type === 'manual') {
+      const chip = document.createElement('span');
+      chip.style.cssText = 'background:#e67e2233;color:#e67e22;padding:2px 8px;border-radius:4px;font-size:10px;';
+      chip.textContent = action.captcha ? 'کپچا' : 'هنگام اجرا تایپ کن';
+      item.appendChild(chip);
     }
 
     const delBtn = document.createElement('button');
@@ -167,23 +175,26 @@ function deleteAction(idx) {
 
 // ─── Export JSON (Record mode) ────────────────────────────────────────────────
 document.getElementById('exportBtn').addEventListener('click', () => {
-  chrome.storage.local.get(['recordedActions'], (result) => {
+  chrome.storage.local.get(['recordedActions'], async (result) => {
     const actions = result.recordedActions || [];
     if (actions.length === 0) {
       showStatus('recStatus', '⚠ هیچ اکشنی برای خروجی وجود ندارد', 'err');
       return;
     }
-    exportRecipe(capturedUrl, capturedCookies, actions);
+    await exportRecipe(actions);
+    showStatus('recStatus', '💾 فایل automation_recipe.json ساخته شد', 'ok');
   });
 });
 
 // ─── Preview ──────────────────────────────────────────────────────────────────
 document.getElementById('previewBtn').addEventListener('click', () => {
-  chrome.storage.local.get(['recordedActions'], (result) => {
+  chrome.storage.local.get(['recordedActions'], async (result) => {
     const actions = result.recordedActions || [];
-    const recipe = buildRecipe(capturedUrl, capturedCookies, actions);
+    const session = await fetchSession();
+    const cookies = session.cookies?.length ? session.cookies : capturedCookies;
+    const recipe = buildRecipe(capturedUrl || session.url || '', cookies, session.storage || [], actions);
     const win = window.open('', '_blank', 'width=600,height=500');
-    win.document.write(`<pre style="background:#1a1a2e;color:#e0e0e0;padding:20px;font-size:12px;">${JSON.stringify(recipe, null, 2)}</pre>`);
+    win.document.write(`<pre style="background:#1a1a2e;color:#e0e0e0;padding:20px;font-size:12px;white-space:pre-wrap;word-break:break-all;">${JSON.stringify(recipe, null, 2)}</pre>`);
   });
 });
 
@@ -257,9 +268,10 @@ document.getElementById('aiAnalyzeBtn').addEventListener('click', async () => {
   });
 });
 
-document.getElementById('aiExportBtn').addEventListener('click', () => {
+document.getElementById('aiExportBtn').addEventListener('click', async () => {
   if (!aiPlanActions) return;
-  exportRecipe(capturedUrl, capturedCookies, aiPlanActions);
+  await exportRecipe(aiPlanActions);
+  showStatus('aiStatus', '💾 فایل automation_recipe.json ساخته شد', 'ok');
 });
 
 // ─── Chat Tab ─────────────────────────────────────────────────────────────────
@@ -315,20 +327,26 @@ function tryParseActions(text) {
   return null;
 }
 
-function buildRecipe(url, cookies, actions) {
+function fetchSession() {
+  return new Promise(resolve => {
+    chrome.runtime.sendMessage({ action: 'getSessionData' }, (res) => resolve(res || {}));
+  });
+}
+
+function buildRecipe(url, cookies, storage, actions) {
   const vars = new Set();
   actions.forEach(a => {
     if (a.value) {
-      const found = a.value.match(/\{\d+\}/g);
+      const found = a.value.match(/\{\d+\}/g); // only {1},{2}... — {ASK} is excluded
       if (found) found.forEach(v => vars.add(v));
     }
   });
 
   return {
-    version: '1.0',
+    version: '1.1',
     generated_at: new Date().toISOString(),
     url,
-    cookies: cookies.map(c => ({
+    cookies: (cookies || []).map(c => ({
       name: c.name,
       value: c.value,
       domain: c.domain,
@@ -337,13 +355,19 @@ function buildRecipe(url, cookies, actions) {
       httpOnly: c.httpOnly || false,
       ...(c.expirationDate ? { expiry: Math.round(c.expirationDate) } : {})
     })),
-    actions: actions.map((a, i) => ({ step: i + 1, ...a })),
+    storage: storage || [],
+    actions: actions.map((a, i) => ({ ...a, step: i + 1 })), // renumber (fixes gaps)
     variables: [...vars]
   };
 }
 
-function exportRecipe(url, cookies, actions) {
-  const recipe = buildRecipe(url, cookies, actions);
+async function exportRecipe(actions) {
+  const session = await fetchSession();
+  const cookies = session.cookies?.length ? session.cookies : capturedCookies;
+  const storage = session.storage || [];
+  const url = capturedUrl || session.url || '';
+  const recipe = buildRecipe(url, cookies, storage, actions);
+
   const json = JSON.stringify(recipe, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const blobUrl = URL.createObjectURL(blob);

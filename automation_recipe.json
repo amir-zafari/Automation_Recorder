@@ -1,0 +1,150 @@
+{
+  "version": "1.1",
+  "generated_at": "2026-05-31T07:51:12.072Z",
+  "url": "https://service.barcelon-group.com/game/index",
+  "cookies": [
+    {
+      "name": "login_token",
+      "value": "eyJpdiI6Inplb1ZpOWszemhFZHV5N25qaldyS3c9PSIsInZhbHVlIjoiSjNBVEVaZUpBVmRqOGl2YUZJVHZLMGhXUnZJNGRIYW1Keno2VnJZZkdMNkRqZFZLc1pOU1R6dlNRcFNITWkvaEZOWTFrYWtaeDJSNVZUTjZVWFI4UjhNNHZLOXB0d2VQSWhLczNjanJMUnVmaENMT2hkNHBxTTNuTXNuZHE2VUJRUnFKSisrMHZZQkFqZXNwY1FyL2JEMk13M3JWc1REakxON01OTkRnUENLTUlOVjgyZURKNXZ6TjA4Q2V6Q1BJaDQ2TFVtQTRQeW5Saldqd0RyVEN4bVJEUHBGQTJySldod2pRVGFQZlFkcGtQeTlWWk5waEFjUCs0aW9JQksyayIsIm1hYyI6ImM1YjM2NzVhY2UyZGY1OTVkYzg2MDlkMjkzOGNmMWMwNTRjOGE2MjAzZmI4ZGIwY2Q1MGYyZmNjYjJjNWRiM2QiLCJ0YWciOiIifQ%3D%3D",
+      "domain": "service.barcelon-group.com",
+      "path": "/",
+      "secure": true,
+      "httpOnly": true,
+      "expiry": 1780299617
+    },
+    {
+      "name": "XSRF-TOKEN",
+      "value": "eyJpdiI6IlMybTlkWGh0dkE0a3FKdks2ZE54UFE9PSIsInZhbHVlIjoiaTVocWJWR21Oa0RsYlZuYkhWUHNtTE5nZFFNdDdoTUhLSmJpYU1NR2Z5WXNZb2hjT3lVQXY2elZPMXluck1MeHhjdncwQVRWWWRzUVo2M2YvTmxLVGRNbkRkMzJjeUhDcFRndzgzdEgwSGVJakF3Q0NkeUQyYWRDKzQrYXRUelMiLCJtYWMiOiJhZjk5ZmYwY2YyNDg2ZTAzMjc1NzMxMTFlNDNkNzRhYTNiYTRkZjlkY2QxZDEyZjYyOTgzMWQzMTY1ZDBlZjY2IiwidGFnIjoiIn0%3D",
+      "domain": "service.barcelon-group.com",
+      "path": "/",
+      "secure": true,
+      "httpOnly": false,
+      "expiry": 1780220421
+    },
+    {
+      "name": "sroys_khdmat_barslon_session",
+      "value": "eyJpdiI6ImRGSlpaWmNmb1V4Y3BET0plZ01zcFE9PSIsInZhbHVlIjoiQXNsUHplV0E5NS9EVmloTEhpS2N5eHhRdDVmM1ZCYVY3Rks0ajVRYVFNbWxMUDBQdlc5WXNaUmUzM0RlR1ZHRTE0ckNKSW5QTHJDTDRNb0hBNUovUTFyNXdvcHlWQ1RPa2kwUnpsY2kybCtmMXk2V2xHa0xsSWtBNkRJcGZjT0IiLCJtYWMiOiIwYzNiMTg3NmVjOGM4MzhiNjU2NWIzODk3ZjA5OWQxNTVmYmJhNmE4MDk3YTkwMmQyMmYxZDU0ZjVjYTE0MDA0IiwidGFnIjoiIn0%3D",
+      "domain": "service.barcelon-group.com",
+      "path": "/",
+      "secure": true,
+      "httpOnly": true
+    }
+  ],
+  "storage": [
+    {
+      "local": {
+        "pusherTransportTLS": "{\"timestamp\":1773075770244,\"transport\":\"ws\",\"latency\":112,\"cacheSkipCount\":0}"
+      },
+      "origin": "https://service.barcelon-group.com",
+      "session": {}
+    }
+  ],
+  "actions": [
+    {
+      "description": "ورود همکاران",
+      "step": 1,
+      "tag": "button",
+      "type": "click",
+      "xpath": "//*[@id=\"login-box\"]/div/div[2]/button"
+    },
+    {
+      "description": "کلمه عبور",
+      "isContentEditable": false,
+      "step": 2,
+      "tag": "input",
+      "type": "input",
+      "value": "09046575708",
+      "xpath": "//*[@id=\"password\"]"
+    },
+    {
+      "description": "شماره همراه",
+      "isContentEditable": false,
+      "step": 3,
+      "tag": "input",
+      "type": "input",
+      "value": "09046575708",
+      "xpath": "//*[@id=\"username\"]"
+    },
+    {
+      "description": "شماره همراه",
+      "isContentEditable": false,
+      "step": 4,
+      "tag": "input",
+      "type": "input",
+      "value": "09046575708",
+      "xpath": "//*[@id=\"username\"]"
+    },
+    {
+      "description": "شماره همراه",
+      "isContentEditable": false,
+      "step": 5,
+      "tag": "input",
+      "type": "input",
+      "value": "09046575708",
+      "xpath": "//*[@id=\"username\"]"
+    },
+    {
+      "captcha": true,
+      "description": "کد امنیتی (ورود دستی هنگام اجرا)",
+      "step": 6,
+      "type": "manual",
+      "value": "{ASK}",
+      "xpath": "//*[@id=\"captcha\"]"
+    },
+    {
+      "description": "login-users",
+      "step": 7,
+      "tag": "button",
+      "type": "click",
+      "xpath": "//*[@id=\"login-users\"]"
+    },
+    {
+      "description": "برو به https://service.barcelon-group.com/case/index",
+      "step": 8,
+      "type": "navigate",
+      "url": "https://service.barcelon-group.com/case/index"
+    },
+    {
+      "description": "nav-4-tab",
+      "step": 9,
+      "tag": "button",
+      "type": "click",
+      "xpath": "//*[@id=\"nav-4-tab\"]"
+    },
+    {
+      "description": "nav-5-tab",
+      "step": 10,
+      "tag": "button",
+      "type": "click",
+      "xpath": "//*[@id=\"nav-5-tab\"]"
+    },
+    {
+      "description": "nav-0-tab",
+      "step": 11,
+      "tag": "button",
+      "type": "click",
+      "xpath": "//*[@id=\"nav-0-tab\"]"
+    },
+    {
+      "description": "nav-2-tab",
+      "step": 12,
+      "tag": "button",
+      "type": "click",
+      "xpath": "//*[@id=\"nav-2-tab\"]"
+    },
+    {
+      "description": "اکانت بازی",
+      "step": 13,
+      "tag": "a",
+      "type": "click",
+      "xpath": "//*[@id=\"nav-tab\"]/a"
+    },
+    {
+      "description": "برو به https://service.barcelon-group.com/game/index",
+      "step": 14,
+      "type": "navigate",
+      "url": "https://service.barcelon-group.com/game/index"
+    }
+  ],
+  "variables": []
+}
