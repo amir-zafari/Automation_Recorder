@@ -261,6 +261,31 @@
       font-size: 10px;
     }
 
+    /* ── Custom select (replaces native <select> to prevent popup close) ── */
+    .cs-wrap { position: relative; display: inline-block; flex-shrink: 0; }
+    .cs-btn {
+      display: flex; align-items: center; justify-content: space-between; gap: 2px;
+      background: #0f3460; border: 1px solid #1a5276; color: #e0e0e0;
+      padding: 2px 5px; border-radius: 4px; font-size: 10px;
+      font-family: Tahoma, Arial, sans-serif; cursor: pointer; width: 68px;
+      white-space: nowrap; overflow: hidden;
+    }
+    .cs-btn:focus { outline: none; border-color: #3498db; }
+    .cs-btn .cs-arr { font-size: 8px; opacity: .6; flex-shrink: 0; }
+    .cs-menu {
+      display: none; position: absolute; top: calc(100% + 2px); right: 0;
+      background: #16213e; border: 1px solid #0f3460; border-radius: 5px;
+      z-index: 9999; min-width: 110px; max-height: 220px; overflow-y: auto;
+      box-shadow: 0 6px 16px rgba(0,0,0,.6);
+    }
+    .cs-menu.open { display: block; }
+    .cs-opt {
+      padding: 6px 10px; cursor: pointer; font-size: 11px;
+      color: #ccc; font-family: Tahoma, Arial, sans-serif;
+    }
+    .cs-opt:hover { background: #0f3460; color: #fff; }
+    .cs-opt.cs-selected { background: #1a3a5e; color: #89b4fa; }
+
     /* ── Move up/down buttons ── */
     .move-btn {
       background: #1a1a2e;
@@ -276,19 +301,6 @@
     .move-btn:hover:not(:disabled) { color: #e0e0e0; background: #0f3460; }
     .move-btn:disabled { opacity: .25; cursor: default; }
 
-    /* ── Type selector ── */
-    .type-select {
-      background: #0f3460;
-      border: 1px solid #1a5276;
-      color: #e0e0e0;
-      padding: 2px 3px;
-      border-radius: 4px;
-      font-size: 10px;
-      font-family: Tahoma, Arial, sans-serif;
-      width: 66px;
-      cursor: pointer;
-    }
-    .type-select:focus { outline: none; border-color: #3498db; }
 
     /* ── Editable description ── */
     .action-desc-input {

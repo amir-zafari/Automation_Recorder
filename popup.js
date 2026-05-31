@@ -85,6 +85,78 @@ document.getElementById('clearActionsBtn').addEventListener('click', () => {
   });
 });
 
+// ─── Custom select (prevents Chrome extension popup from closing) ─────────────
+// Native <select> opens an OS-level dropdown that steals focus from the popup
+// window, causing Chrome to immediately close it. This custom version stays
+// entirely within the DOM so no focus is ever lost.
+//
+// options  : [[value, label], ...]
+// current  : currently selected value
+// onChange : called with the new value when user picks an option
+// width    : CSS width for the trigger button (default '68px')
+function mkCustomSelect(options, current, onChange, width = '68px') {
+  const wrap = document.createElement('div');
+  wrap.className = 'cs-wrap';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'cs-btn';
+  btn.style.width = width;
+
+  const lbl = document.createElement('span');
+  lbl.className = 'cs-lbl';
+  lbl.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;';
+  const initLabel = (options.find(([v]) => v === current) || options[0] || [])[1] || current;
+  lbl.textContent = initLabel;
+
+  const arr = document.createElement('span');
+  arr.className = 'cs-arr';
+  arr.textContent = '▾';
+
+  btn.appendChild(lbl);
+  btn.appendChild(arr);
+
+  const menu = document.createElement('div');
+  menu.className = 'cs-menu';
+
+  const close = () => menu.classList.remove('open');
+
+  options.forEach(([value, label]) => {
+    const opt = document.createElement('div');
+    opt.className = 'cs-opt' + (value === current ? ' cs-selected' : '');
+    opt.textContent = label;
+
+    opt.addEventListener('mousedown', (e) => {
+      e.preventDefault();           // ← key: keeps popup focused
+      e.stopPropagation();
+      menu.querySelectorAll('.cs-opt').forEach(o => o.classList.remove('cs-selected'));
+      opt.classList.add('cs-selected');
+      lbl.textContent = label;
+      close();
+      onChange(value);
+    });
+    menu.appendChild(opt);
+  });
+
+  btn.addEventListener('mousedown', (e) => {
+    e.preventDefault();             // ← key: keeps popup focused
+    e.stopPropagation();
+    const wasOpen = menu.classList.contains('open');
+    // Close any other open menus first
+    document.querySelectorAll('.cs-menu.open').forEach(m => m.classList.remove('open'));
+    if (!wasOpen) menu.classList.add('open');
+  });
+
+  // Click outside → close
+  document.addEventListener('mousedown', (e) => {
+    if (!wrap.contains(e.target)) close();
+  }, true);
+
+  wrap.appendChild(btn);
+  wrap.appendChild(menu);
+  return wrap;
+}
+
 // ─── Action type meta ────────────────────────────────────────────────────────
 const ACTION_TYPES  = ['click','input','keyboard','wait','navigate','manual','view','condition'];
 const ACTION_LABELS = {
@@ -162,20 +234,12 @@ function mkActionRow(action, idx, actions, save, nestLevel) {
   moveWrap.appendChild(mkMv('▼',  1));
   item.appendChild(moveWrap);
 
-  // type selector
-  const tSel = document.createElement('select');
-  tSel.className = 'type-select';
-  ACTION_TYPES.forEach(t => {
-    const o = document.createElement('option');
-    o.value = t; o.textContent = ACTION_LABELS[t] || t;
-    if (t === action.type) o.selected = true;
-    tSel.appendChild(o);
-  });
-  tSel.addEventListener('change', () => {
-    const a = [...actions];
-    a[idx] = applyTypeChange(a[idx], tSel.value);
-    save(a);
-  });
+  // type selector — custom (native <select> closes Chrome popup)
+  const tSel = mkCustomSelect(
+    ACTION_TYPES.map(t => [t, ACTION_LABELS[t] || t]),
+    action.type,
+    (newType) => { const a = [...actions]; a[idx] = applyTypeChange(a[idx], newType); save(a); }
+  );
   item.appendChild(tSel);
 
   // description + value (condition uses its own layout)
@@ -282,17 +346,12 @@ function mkCondHeader(action, idx, actions, save) {
 
   wrap.appendChild(mkCI('left', '{view1}', '68px'));
 
-  const opSel = document.createElement('select');
-  opSel.className = 'type-select'; opSel.style.width = '100px';
-  CONDITION_OPS.forEach(([v, label]) => {
-    const o = document.createElement('option');
-    o.value = v; o.textContent = label;
-    if (v === (action.operator || '==')) o.selected = true;
-    opSel.appendChild(o);
-  });
-  opSel.addEventListener('change', () => {
-    const a = [...actions]; a[idx] = { ...a[idx], operator: opSel.value }; save(a);
-  });
+  const opSel = mkCustomSelect(
+    CONDITION_OPS,
+    action.operator || '==',
+    (newOp) => { const a = [...actions]; a[idx] = { ...a[idx], operator: newOp }; save(a); },
+    '100px'
+  );
   wrap.appendChild(opSel);
 
   wrap.appendChild(mkCI('right', 'مقدار', '68px'));

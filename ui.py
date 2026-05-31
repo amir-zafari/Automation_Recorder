@@ -195,6 +195,10 @@ def main():
     def run_thread(recipe, excel, sheet, count, delay,
                    headless, keep_open, fresh_session, start_stage):
 
+        # Reset shared state so a new run always starts clean
+        input_event.clear()
+        state['stopped'] = False
+
         # -u = unbuffered stdout so every print() reaches us immediately
         cmd = [sys.executable, '-u', str(AUTOMATION_SCRIPT), '--recipe', recipe]
         if excel:         cmd += ['--excel', excel]
@@ -266,17 +270,28 @@ def main():
                         input_event.wait()       # blocks this thread, not the UI
 
                         # Send the answer to the subprocess
+                        # (process may have died while we were waiting — ignore broken pipe)
                         answer = input_holder[0] + '\n'
-                        proc.stdin.write(answer)
-                        proc.stdin.flush()
-                        append(f"  ✏ Sent: {input_holder[0]!r}\n", 'sent')
+                        try:
+                            proc.stdin.write(answer)
+                            proc.stdin.flush()
+                            append(f"  ✏ Sent: {input_holder[0]!r}\n", 'sent')
+                        except OSError:
+                            pass
 
             # flush any remaining partial line
             if buf:
                 append(buf)
 
-            proc.wait()
-            rc = proc.returncode
+            # Wait up to 5 s; if the process hangs after terminate, kill it hard
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                try: proc.kill()
+                except Exception: pass
+                try: proc.wait()
+                except Exception: pass
+            rc = proc.returncode if proc.returncode is not None else -1
             append(f"\n{'─'*60}\n")
             if rc == 0:
                 append("✅ Finished successfully.\n", 'ok')
@@ -328,6 +343,12 @@ def main():
         if proc and proc.poll() is None:
             state['stopped'] = True
             proc.terminate()
+            # Close the stdout pipe so proc.stdout.read(1) returns '' immediately
+            # instead of blocking forever (Windows pipe-handle issue).
+            try: proc.stdout.close()
+            except Exception: pass
+            # Unblock any thread stuck on input_event.wait()
+            input_event.set()
             btn_stop.config(state='disabled')
 
     btn_run.config(command=on_run)
