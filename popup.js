@@ -94,6 +94,11 @@ function refreshActionsList() {
   });
 }
 
+// ─── Action type meta ────────────────────────────────────────────────────────
+const ACTION_TYPES   = ['click', 'input', 'keyboard', 'wait', 'navigate', 'manual'];
+const ACTION_LABELS  = { click:'کلیک', input:'تایپ', keyboard:'کلید', wait:'انتظار', navigate:'برو', manual:'دستی' };
+
+// ─── Render ───────────────────────────────────────────────────────────────────
 function renderActions(actions) {
   const list = document.getElementById('actionsList');
 
@@ -103,63 +108,189 @@ function renderActions(actions) {
   }
 
   list.innerHTML = '';
+  list.appendChild(makeInsertBtn(0));
+
   actions.forEach((action, idx) => {
     const item = document.createElement('div');
     item.className = 'action-item';
 
-    const badge = document.createElement('span');
-    badge.className = `action-badge badge-${action.type}`;
-    const badgeText = { keyboard: '⌨ key', manual: '⏸ دستی', navigate: '↪ برو' };
-    badge.textContent = badgeText[action.type] || action.type;
+    // ── Move ↑↓ ──
+    const moveWrap = document.createElement('div');
+    moveWrap.style.cssText = 'display:flex;flex-direction:column;gap:1px;flex-shrink:0;';
+    const upBtn = document.createElement('button');
+    upBtn.className = 'move-btn';
+    upBtn.textContent = '▲';
+    upBtn.disabled = idx === 0;
+    upBtn.title = 'بالاتر';
+    upBtn.addEventListener('click', () => moveAction(idx, -1));
+    const dnBtn = document.createElement('button');
+    dnBtn.className = 'move-btn';
+    dnBtn.textContent = '▼';
+    dnBtn.disabled = idx === actions.length - 1;
+    dnBtn.title = 'پایین‌تر';
+    dnBtn.addEventListener('click', () => moveAction(idx, 1));
+    moveWrap.appendChild(upBtn);
+    moveWrap.appendChild(dnBtn);
+    item.appendChild(moveWrap);
 
-    const desc = document.createElement('span');
-    desc.className = 'action-desc';
+    // ── Type selector ──
+    const typeSelect = document.createElement('select');
+    typeSelect.className = 'type-select';
+    ACTION_TYPES.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = ACTION_LABELS[t] || t;
+      if (t === action.type) opt.selected = true;
+      typeSelect.appendChild(opt);
+    });
+    typeSelect.addEventListener('change', () => changeActionType(idx, typeSelect.value));
+    item.appendChild(typeSelect);
+
+    // ── Description (editable) ──
+    const desc = document.createElement('input');
+    desc.className = 'action-desc-input';
+    desc.value = action.description || action.url || '';
+    desc.placeholder = 'توضیح';
     desc.title = action.xpath || action.url || '';
-    desc.textContent = action.description || action.url || action.xpath?.substring(0, 30) || '';
-
-    item.appendChild(badge);
+    desc.addEventListener('change', () => updateActionField(idx, 'description', desc.value));
     item.appendChild(desc);
 
-    // فیلد مقدار برای click و input — کاربر میتونه متن یا {1} وارد کنه
-    if (action.type === 'input' || action.type === 'click') {
-      const valInput = document.createElement('input');
-      valInput.className = 'action-value-input';
-      valInput.value = action.value || '';
-      valInput.placeholder = action.type === 'click' ? 'متن تایپ (اختیاری)' : '{1} یا متن ثابت';
-      valInput.title = 'اگر پر کنی، بعد از کلیک این متن تایپ میشه\n{1}، {2} = متغیر از اکسل';
-      valInput.addEventListener('change', () => {
-        updateActionValue(idx, valInput.value, action.type);
-      });
-      item.appendChild(valInput);
-    } else if (action.type === 'keyboard') {
-      const keySpan = document.createElement('span');
-      keySpan.style.cssText = 'background:#9b59b633;color:#9b59b6;padding:2px 8px;border-radius:4px;font-size:10px;';
-      keySpan.textContent = action.key;
-      item.appendChild(keySpan);
-    } else if (action.type === 'manual') {
-      const chip = document.createElement('span');
-      chip.style.cssText = 'background:#e67e2233;color:#e67e22;padding:2px 8px;border-radius:4px;font-size:10px;';
-      chip.textContent = action.captcha ? 'کپچا' : 'هنگام اجرا تایپ کن';
-      item.appendChild(chip);
-    }
+    // ── Value area (type-specific) ──
+    const valNode = buildValueArea(action, idx);
+    if (valNode) item.appendChild(valNode);
 
+    // ── Delete ──
     const delBtn = document.createElement('button');
     delBtn.className = 'del-btn';
     delBtn.textContent = '×';
     delBtn.title = 'حذف';
     delBtn.addEventListener('click', () => deleteAction(idx));
-
     item.appendChild(delBtn);
+
     list.appendChild(item);
+    list.appendChild(makeInsertBtn(idx + 1));
   });
 }
 
-function updateActionValue(idx, newValue, currentType) {
+// Build the right input widget for each action type
+function buildValueArea(action, idx) {
+  const t = action.type;
+
+  if (t === 'wait') {
+    const inp = document.createElement('input');
+    inp.type = 'number';
+    inp.className = 'action-value-input';
+    inp.style.width = '58px';
+    inp.min = '0.1'; inp.step = '0.5';
+    inp.value = action.seconds != null ? action.seconds : 1;
+    inp.title = 'ثانیه';
+    inp.addEventListener('change', () =>
+      updateActionField(idx, 'seconds', parseFloat(inp.value) || 1));
+    return inp;
+  }
+
+  if (t === 'navigate') {
+    const inp = document.createElement('input');
+    inp.className = 'action-value-input';
+    inp.style.width = '110px';
+    inp.value = action.url || '';
+    inp.placeholder = 'https://...';
+    inp.addEventListener('change', () => updateActionField(idx, 'url', inp.value));
+    return inp;
+  }
+
+  if (t === 'keyboard') {
+    const inp = document.createElement('input');
+    inp.className = 'action-value-input';
+    inp.style.width = '72px';
+    inp.value = action.key || 'Enter';
+    inp.placeholder = 'Enter';
+    inp.title = 'کلید: Enter, Tab, Escape, …';
+    inp.addEventListener('change', () => updateActionField(idx, 'key', inp.value));
+    return inp;
+  }
+
+  if (t === 'input' || t === 'click') {
+    const inp = document.createElement('input');
+    inp.className = 'action-value-input';
+    inp.value = action.value || '';
+    inp.placeholder = t === 'click' ? 'متن (اختیاری)' : '{1} یا متن';
+    inp.title = '{1},{2} = متغیر اکسل';
+    inp.addEventListener('change', () => updateActionField(idx, 'value', inp.value));
+    return inp;
+  }
+
+  if (t === 'manual') {
+    const chip = document.createElement('span');
+    chip.style.cssText = 'background:#e67e2233;color:#e67e22;padding:2px 8px;border-radius:4px;font-size:10px;white-space:nowrap;flex-shrink:0;';
+    chip.textContent = action.captcha ? 'کپچا' : '{ASK}';
+    return chip;
+  }
+
+  return null;
+}
+
+// Small "+" row inserted between action items
+function makeInsertBtn(atIndex) {
+  const row = document.createElement('div');
+  row.className = 'insert-row';
+  const btn = document.createElement('button');
+  btn.className = 'insert-btn';
+  btn.textContent = '+ اکشن جدید';
+  btn.title = `اضافه کردن اکشن در موقعیت ${atIndex + 1}`;
+  btn.addEventListener('click', () => insertAction(atIndex));
+  row.appendChild(btn);
+  return row;
+}
+
+// ─── Mutation helpers ─────────────────────────────────────────────────────────
+function insertAction(atIndex) {
+  chrome.storage.local.get(['recordedActions'], (result) => {
+    const actions = result.recordedActions || [];
+    actions.splice(atIndex, 0, {
+      type: 'wait',
+      seconds: 1,
+      description: 'انتظار',
+    });
+    chrome.storage.local.set({ recordedActions: actions }, refreshActionsList);
+  });
+}
+
+function moveAction(idx, dir) {
+  chrome.storage.local.get(['recordedActions'], (result) => {
+    const actions = result.recordedActions || [];
+    const target = idx + dir;
+    if (target < 0 || target >= actions.length) return;
+    [actions[idx], actions[target]] = [actions[target], actions[idx]];
+    chrome.storage.local.set({ recordedActions: actions }, refreshActionsList);
+  });
+}
+
+function changeActionType(idx, newType) {
+  chrome.storage.local.get(['recordedActions'], (result) => {
+    const actions = result.recordedActions || [];
+    if (!actions[idx]) return;
+    const old = actions[idx];
+    const updated = {
+      type: newType,
+      xpath: old.xpath || '',
+      description: old.description || '',
+    };
+    if (newType === 'wait')     updated.seconds  = old.seconds  || 1;
+    if (newType === 'keyboard') updated.key      = old.key      || 'Enter';
+    if (newType === 'navigate') updated.url      = old.url      || '';
+    if (newType === 'input' || newType === 'click') updated.value = old.value || '';
+    if (newType === 'manual')   updated.value    = '{ASK}';
+    actions[idx] = updated;
+    chrome.storage.local.set({ recordedActions: actions }, refreshActionsList);
+  });
+}
+
+function updateActionField(idx, field, value) {
   chrome.storage.local.get(['recordedActions'], (result) => {
     const actions = result.recordedActions || [];
     if (actions[idx]) {
-      actions[idx].value = newValue;
-      // اگه روی یه click مقدار گذاشتن، نوعش رو عوض نکن — python خودش handle میکنه
+      actions[idx][field] = value;
       chrome.storage.local.set({ recordedActions: actions });
     }
   });
@@ -192,8 +323,8 @@ document.getElementById('previewBtn').addEventListener('click', () => {
     const actions = result.recordedActions || [];
     const session = await fetchSession();
     const cookies = session.cookies?.length ? session.cookies : capturedCookies;
-    const recipe = buildRecipe(capturedUrl || session.url || '', cookies, session.storage || [], actions);
-    const win = window.open('', '_blank', 'width=600,height=500');
+    const recipe = buildRecipe(capturedUrl || session.startUrl || session.url || '', cookies, session.storage || [], actions, session.stages);
+    const win = window.open('', '_blank', 'width=700,height=600');
     win.document.write(`<pre style="background:#1a1a2e;color:#e0e0e0;padding:20px;font-size:12px;white-space:pre-wrap;word-break:break-all;">${JSON.stringify(recipe, null, 2)}</pre>`);
   });
 });
@@ -333,7 +464,7 @@ function fetchSession() {
   });
 }
 
-function buildRecipe(url, cookies, storage, actions) {
+function buildRecipe(url, cookies, storage, actions, stages) {
   const vars = new Set();
   actions.forEach(a => {
     if (a.value) {
@@ -343,7 +474,7 @@ function buildRecipe(url, cookies, storage, actions) {
   });
 
   return {
-    version: '1.1',
+    version: '1.2',
     generated_at: new Date().toISOString(),
     url,
     cookies: (cookies || []).map(c => ({
@@ -356,6 +487,22 @@ function buildRecipe(url, cookies, storage, actions) {
       ...(c.expirationDate ? { expiry: Math.round(c.expirationDate) } : {})
     })),
     storage: storage || [],
+    stages: (stages || []).map(s => ({
+      index: s.index,
+      name: s.name,
+      url: s.url,
+      action_index: s.action_index,
+      cookies: (s.cookies || []).map(c => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path || '/',
+        secure: c.secure || false,
+        httpOnly: c.httpOnly || false,
+        ...(c.expirationDate ? { expiry: Math.round(c.expirationDate) } : {})
+      })),
+      storage: s.storage || [],
+    })),
     actions: actions.map((a, i) => ({ ...a, step: i + 1 })), // renumber (fixes gaps)
     variables: [...vars]
   };
@@ -365,8 +512,8 @@ async function exportRecipe(actions) {
   const session = await fetchSession();
   const cookies = session.cookies?.length ? session.cookies : capturedCookies;
   const storage = session.storage || [];
-  const url = capturedUrl || session.url || '';
-  const recipe = buildRecipe(url, cookies, storage, actions);
+  const url = capturedUrl || session.startUrl || session.url || '';
+  const recipe = buildRecipe(url, cookies, storage, actions, session.stages);
 
   const json = JSON.stringify(recipe, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
@@ -378,5 +525,16 @@ async function exportRecipe(actions) {
   URL.revokeObjectURL(blobUrl);
 }
 
-// Init
+// ─── Init ─────────────────────────────────────────────────────────────────────
 refreshActionsList();
+
+// Restore recording state if popup was closed and reopened mid-recording
+chrome.storage.local.get(['isRecording'], ({ isRecording: rec }) => {
+  if (rec) {
+    isRecording = true;
+    document.getElementById('startRecBtn').disabled = true;
+    document.getElementById('stopRecBtn').disabled = false;
+    showStatus('recStatus', '⏺ در حال ضبط... روی عناصر صفحه کلیک کنید', 'info');
+    startPolling();
+  }
+});

@@ -99,9 +99,10 @@ def main():
     opts = ttk.Frame(card, style='Card.TFrame')
     opts.grid(row=3, column=0, columnspan=3, sticky='ew')
 
-    var_sheet = tk.StringVar(value='0')
-    var_count = tk.StringVar()
-    var_delay = tk.StringVar(value='0.4')
+    var_sheet       = tk.StringVar(value='0')
+    var_count       = tk.StringVar()
+    var_delay       = tk.StringVar(value='0.4')
+    var_start_stage = tk.StringVar()
 
     def opt_field(c, label, var, width=8):
         ttk.Label(opts, text=label, style='TLabel').grid(
@@ -111,6 +112,7 @@ def main():
     opt_field(0, 'Sheet',       var_sheet, 8)
     opt_field(2, 'Count',       var_count, 6)
     opt_field(4, 'Delay (sec)', var_delay, 6)
+    opt_field(6, 'Start stage', var_start_stage, 4)
 
     chk_row = ttk.Frame(card, style='Card.TFrame')
     chk_row.grid(row=4, column=0, columnspan=3, sticky='w', pady=(10, 0))
@@ -191,7 +193,7 @@ def main():
     # ── Background automation thread ───────────────────────────────────────────
 
     def run_thread(recipe, excel, sheet, count, delay,
-                   headless, keep_open, fresh_session):
+                   headless, keep_open, fresh_session, start_stage):
 
         # -u = unbuffered stdout so every print() reaches us immediately
         cmd = [sys.executable, '-u', str(AUTOMATION_SCRIPT), '--recipe', recipe]
@@ -202,6 +204,7 @@ def main():
         if headless:      cmd.append('--headless')
         if keep_open:     cmd.append('--keep-open')
         if fresh_session: cmd.append('--fresh-session')
+        if start_stage:   cmd += ['--start-stage', start_stage]
 
         log_widget.after(0, lambda: log_widget.config(state='normal'))
         log_widget.after(0, lambda: log_widget.delete('1.0', tk.END))
@@ -315,6 +318,7 @@ def main():
                 var_headless.get(),
                 var_keep_open.get(),
                 var_fresh_session.get(),
+                var_start_stage.get().strip() or None,
             ),
             daemon=True,
         ).start()

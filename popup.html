@@ -260,6 +260,68 @@
       border-radius: 10px;
       font-size: 10px;
     }
+
+    /* ── Move up/down buttons ── */
+    .move-btn {
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      color: #666;
+      cursor: pointer;
+      font-size: 8px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      line-height: 1.2;
+      display: block;
+    }
+    .move-btn:hover:not(:disabled) { color: #e0e0e0; background: #0f3460; }
+    .move-btn:disabled { opacity: .25; cursor: default; }
+
+    /* ── Type selector ── */
+    .type-select {
+      background: #0f3460;
+      border: 1px solid #1a5276;
+      color: #e0e0e0;
+      padding: 2px 3px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-family: Tahoma, Arial, sans-serif;
+      width: 66px;
+      cursor: pointer;
+    }
+    .type-select:focus { outline: none; border-color: #3498db; }
+
+    /* ── Editable description ── */
+    .action-desc-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid #0f3460;
+      color: #ccc;
+      font-size: 11px;
+      font-family: Tahoma, Arial, sans-serif;
+      padding: 2px 4px;
+      min-width: 0;
+    }
+    .action-desc-input:focus { outline: none; border-bottom-color: #3498db; color: #fff; }
+
+    /* ── Insert-action row between items ── */
+    .insert-row {
+      display: flex;
+      padding: 0 8px;
+    }
+    .insert-btn {
+      flex: 1;
+      background: none;
+      border: 1px dashed #1a3a5e;
+      color: #2a4a6e;
+      cursor: pointer;
+      font-size: 10px;
+      padding: 2px 0;
+      border-radius: 3px;
+      transition: all .15s;
+      font-family: Tahoma, Arial, sans-serif;
+    }
+    .insert-btn:hover { border-color: #3498db; color: #3498db; background: #3498db11; }
   </style>
 </head>
 <body>

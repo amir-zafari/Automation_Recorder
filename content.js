@@ -90,21 +90,19 @@ if (!window.__autoRecorderLoaded__) {
   }
 
   // ─── Recording storage (step derived from array length — no drift) ────────────
+  // De-dupes consecutive edits to the same field: typing then re-blurring the
+  // same input just updates its value instead of adding a new action.
   function saveAction(action) {
     chrome.storage.local.get(['recordedActions'], (result) => {
       const actions = result.recordedActions || [];
-      actions.push({ ...action, step: actions.length + 1 });
-      chrome.storage.local.set({ recordedActions: actions });
-    });
-  }
-
-  function recordNavigateIfNew() {
-    const url = location.href;
-    chrome.storage.local.get(['lastRecordedUrl'], ({ lastRecordedUrl }) => {
-      if (lastRecordedUrl && lastRecordedUrl !== url) {
-        saveAction({ type: 'navigate', url, description: 'برو به ' + url });
+      const last = actions[actions.length - 1];
+      if (last && ['input', 'manual'].includes(action.type) &&
+          last.type === action.type && last.xpath === action.xpath) {
+        actions[actions.length - 1] = { ...last, ...action, step: last.step };
+      } else {
+        actions.push({ ...action, step: actions.length + 1 });
       }
-      chrome.storage.local.set({ lastRecordedUrl: url });
+      chrome.storage.local.set({ recordedActions: actions });
     });
   }
 
@@ -237,10 +235,11 @@ if (!window.__autoRecorderLoaded__) {
     attachListeners();
     showIndicator();
     if (fresh) {
-      chrome.storage.local.set({ recordedActions: [], lastRecordedUrl: location.href });
-    } else {
-      recordNavigateIfNew(); // resumed after a navigation → log the new page
+      chrome.storage.local.set({ recordedActions: [] });
     }
+    // Navigations/stages are recorded by background.js (chrome.tabs.onUpdated),
+    // which can also read httpOnly cookies — so the content script only needs
+    // to re-attach its action listeners after each page load.
   }
 
   function endRecording() {

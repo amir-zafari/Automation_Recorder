@@ -193,11 +193,25 @@ def set_storage(driver, storage_entries: list):
                     print(f"    ⚠ {key} '{k}' skipped: {e}")
 
 
-def apply_session(driver, recipe: dict):
-    """Recreate the logged-in session once, before any run."""
-    url      = recipe.get('url', '')
-    cookies  = recipe.get('cookies', []) or []
-    storage  = recipe.get('storage', []) or []
+def apply_session(driver, recipe: dict, start_stage: int = -1):
+    """Recreate the logged-in session once, before any run.
+
+    If start_stage >= 0, use that stage's cookies/storage/url so the runner
+    can skip straight to (e.g.) the logged-in page without replaying login.
+    """
+    stages = recipe.get('stages', []) or []
+
+    # Resolve which source to use: a specific stage, or the top-level snapshot.
+    if start_stage >= 0 and start_stage < len(stages):
+        stage = stages[start_stage]
+        url     = stage.get('url', '') or recipe.get('url', '')
+        cookies = stage.get('cookies', []) or []
+        storage = stage.get('storage', []) or []
+        print(f"  ⏭  Starting from stage {start_stage}: {stage.get('name', url)}")
+    else:
+        url     = recipe.get('url', '')
+        cookies = recipe.get('cookies', []) or []
+        storage = recipe.get('storage', []) or []
 
     if not url and storage:
         url = storage[0].get('origin', '')
@@ -387,6 +401,8 @@ Examples:
     parser.add_argument('--keep-open', action='store_true', help='Leave the browser open after finishing')
     parser.add_argument('--fresh-session', action='store_true',
                         help='Re-apply cookies/storage before every run (default: only once)')
+    parser.add_argument('--start-stage', type=int, default=-1,
+                        help='Stage index to start from (0-based). Uses that stage\'s cookies/storage/URL instead of the top-level snapshot.')
     args = parser.parse_args()
 
     recipe_path = Path(args.recipe)
@@ -401,6 +417,11 @@ Examples:
     print(f"   Variables: {recipe.get('variables', [])}")
     print(f"   Cookies: {len(recipe.get('cookies', []) or [])}")
     print(f"   Storage origins: {len(recipe.get('storage', []) or [])}")
+    stages = recipe.get('stages', []) or []
+    if stages:
+        print(f"   Stages: {len(stages)}")
+        for s in stages:
+            print(f"     [{s['index']}] {s.get('name', s.get('url', ''))}")
 
     # Build the list of variable-sets, one per run.
     if args.excel:
@@ -427,8 +448,12 @@ Examples:
     driver = make_driver(args.headless)
     try:
         # Recreate the logged-in session ONCE, then reuse it for every run.
-        apply_session(driver, recipe)
-        loop_url = recipe.get('url', '')
+        apply_session(driver, recipe, args.start_stage)
+        stages = recipe.get('stages', []) or []
+        if args.start_stage >= 0 and args.start_stage < len(stages):
+            loop_url = stages[args.start_stage].get('url', recipe.get('url', ''))
+        else:
+            loop_url = recipe.get('url', '')
 
         for i, variables in enumerate(run_vars):
             preview = dict(list(variables.items())[:3]) if variables else '(no variables)'
@@ -436,7 +461,7 @@ Examples:
 
             if i > 0:
                 if args.fresh_session:
-                    apply_session(driver, recipe)
+                    apply_session(driver, recipe, args.start_stage)
                 elif loop_url:
                     driver.get(loop_url)     # back to the start page for the next row
                     wait_page_ready(driver)
