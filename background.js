@@ -186,8 +186,9 @@ User Request: ${request.userRequest}`;
       try {
         await setLocal({
           isRecording: true,
-          recordedActions: [],
+          // recordedActions intentionally NOT reset — user uses Clear button
           stages: [],
+          recordingBranch: null,
           recordingTabId: tab.id,
           recordingStartUrl: tab.url,
           lastStageUrl: tab.url,
@@ -224,6 +225,7 @@ User Request: ${request.userRequest}`;
 
       await setLocal({
         isRecording: false,
+        recordingBranch: null,  // always clear branch target on stop
         capturedCookies: cookies,
         capturedStorage: storage ? [storage] : [],
         capturedUrl: url,
@@ -231,6 +233,26 @@ User Request: ${request.userRequest}`;
       });
       try { await chrome.tabs.sendMessage(recordingTabId, { action: 'stopRecording' }); } catch (_) {}
       sendResponse({ ok: true, cookies: cookies.length, storageCount: dumpStorageSize(storage), stages: stages.length });
+    });
+    return true;
+  }
+
+  // Forward pick-mode activation to the content script of the active/recording tab
+  if (request.action === 'activatePicker') {
+    getLocal(['recordingTabId']).then(async ({ recordingTabId }) => {
+      let tabId = recordingTabId;
+      if (!tabId) {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        tabId = tabs[0]?.id;
+      }
+      if (!tabId) { sendResponse({ ok: false }); return; }
+      await ensureContentScript(tabId);
+      try {
+        await chrome.tabs.sendMessage(tabId, { action: 'startPicking', target: request.target });
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
     });
     return true;
   }

@@ -89,18 +89,30 @@ if (!window.__autoRecorderLoaded__) {
     return !!img && CAPTCHA_HINTS.some(h => hay.includes(h.substring(0, 4)));
   }
 
-  // ─── Recording storage (step derived from array length — no drift) ────────────
-  // De-dupes consecutive edits to the same field: typing then re-blurring the
-  // same input just updates its value instead of adding a new action.
+  // ─── Recording storage ────────────────────────────────────────────────────────
+  // Supports recordingBranch: if set to {condIdx, branch}, new actions go into
+  // that condition's then/else sub-list instead of the top-level array.
+  // De-dupes consecutive edits to the same field.
   function saveAction(action) {
-    chrome.storage.local.get(['recordedActions'], (result) => {
+    chrome.storage.local.get(['recordedActions', 'recordingBranch'], (result) => {
       const actions = result.recordedActions || [];
-      const last = actions[actions.length - 1];
+      const rb = result.recordingBranch; // null | {condIdx, branch:'then'|'else'}
+
+      let target; // reference to the array we append into
+      if (rb && rb.condIdx != null && actions[rb.condIdx]) {
+        const parent = actions[rb.condIdx];
+        if (!parent[rb.branch]) parent[rb.branch] = [];
+        target = parent[rb.branch];
+      } else {
+        target = actions;
+      }
+
+      const last = target[target.length - 1];
       if (last && ['input', 'manual'].includes(action.type) &&
           last.type === action.type && last.xpath === action.xpath) {
-        actions[actions.length - 1] = { ...last, ...action, step: last.step };
+        target[target.length - 1] = { ...last, ...action, step: last.step };
       } else {
-        actions.push({ ...action, step: actions.length + 1 });
+        target.push({ ...action, step: target.length + 1 });
       }
       chrome.storage.local.set({ recordedActions: actions });
     });
@@ -230,16 +242,12 @@ if (!window.__autoRecorderLoaded__) {
     if (ind) ind.remove();
   }
 
-  function beginRecording({ fresh }) {
+  function beginRecording() {
     isRecording = true;
     attachListeners();
     showIndicator();
-    if (fresh) {
-      chrome.storage.local.set({ recordedActions: [] });
-    }
-    // Navigations/stages are recorded by background.js (chrome.tabs.onUpdated),
-    // which can also read httpOnly cookies — so the content script only needs
-    // to re-attach its action listeners after each page load.
+    // Actions are never reset here — cleared only via the popup Clear button.
+    // Navigations/stages are recorded by background.js (chrome.tabs.onUpdated).
   }
 
   function endRecording() {
@@ -248,13 +256,113 @@ if (!window.__autoRecorderLoaded__) {
     hideIndicator();
   }
 
-  // Resume automatically if this page loaded while a recording is active and
-  // this is the tab the user started recording in.
+  // ─── Element picker ──────────────────────────────────────────────────────────
+  // Activated from popup when user clicks ⊙ on a click/input action row.
+  let _pickTarget = null;
+
+  function enterPickMode(target) {
+    _pickTarget = target;
+    _showPickBar(target.type);
+    if (target.type === 'click') {
+      document.addEventListener('click', _onPickClick, { capture: true });
+    } else {
+      document.addEventListener('click', _onPickInputClick, { capture: true });
+    }
+    document.addEventListener('keydown', _onPickEsc, { capture: true });
+  }
+
+  function cancelPickMode() {
+    if (!_pickTarget) return;
+    _pickTarget = null;
+    _removePickBar();
+    document.removeEventListener('click',   _onPickClick,       true);
+    document.removeEventListener('click',   _onPickInputClick,  true);
+    document.removeEventListener('blur',    _onPickBlur,        true);
+    document.removeEventListener('keydown', _onPickEsc,         true);
+    chrome.storage.local.remove('pickResult');
+  }
+
+  function _onPickEsc(e) {
+    if (e.key === 'Escape') { e.stopPropagation(); cancelPickMode(); }
+  }
+
+  function _onPickClick(e) {
+    if (e.target.id === '__pick_bar__') return;
+    e.stopPropagation(); e.preventDefault();
+    document.removeEventListener('click', _onPickClick, true);
+    const el = getClickable(e.target);
+    _finalizePick({ type: 'click', xpath: getXPath(el), description: getElementDescription(el), tag: el.tagName.toLowerCase() });
+  }
+
+  function _onPickInputClick(e) {
+    if (e.target.id === '__pick_bar__') return;
+    document.removeEventListener('click', _onPickInputClick, true);
+    // Don't prevent default — let the field get focused so user can type
+    document.addEventListener('blur', _onPickBlur, { capture: true });
+  }
+
+  function _onPickBlur(e) {
+    document.removeEventListener('blur', _onPickBlur, true);
+    const el = e.target;
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (!['input', 'textarea', 'select'].includes(tag) &&
+        !el.getAttribute?.('contenteditable')) return;
+    if (el.type === 'submit' || el.type === 'button') return;
+
+    const ce = el.getAttribute && el.getAttribute('contenteditable');
+    const isCE = ce === 'true' || ce === '';
+    const tEl = isCE ? getContentEditableRoot(el) : el;
+    _finalizePick({
+      type: 'input',
+      xpath: getXPath(tEl),
+      value: (el.value || el.innerText?.trim() || '').substring(0, 200),
+      description: getElementDescription(tEl),
+      tag: tEl.tagName.toLowerCase(),
+      isContentEditable: isCE,
+    });
+  }
+
+  function _finalizePick(captured) {
+    const ref = _pickTarget ? _pickTarget.ref : null;
+    cancelPickMode();
+    chrome.storage.local.set({ pickResult: { ref, captured } });
+  }
+
+  function _showPickBar(type) {
+    if (document.getElementById('__pick_bar__')) return;
+    const bar = document.createElement('div');
+    bar.id = '__pick_bar__';
+    bar.style.cssText = [
+      'position:fixed','top:12px','left:50%','transform:translateX(-50%)',
+      'background:#2980b9','color:#fff','padding:7px 20px','border-radius:20px',
+      'z-index:2147483647','font:bold 13px sans-serif',
+      'box-shadow:0 2px 10px rgba(0,0,0,.5)','pointer-events:none',
+    ].join(';');
+    bar.textContent = type === 'click'
+      ? '⊙ روی عنصر مورد نظر کلیک کنید  (Esc = لغو)'
+      : '⊙ روی فیلد کلیک و چیزی تایپ کنید  (Esc = لغو)';
+    document.body.appendChild(bar);
+
+    // Cursor feedback via injected style
+    const style = document.createElement('style');
+    style.id = '__pick_style__';
+    style.textContent = '* { cursor: crosshair !important; }';
+    document.head.appendChild(style);
+  }
+
+  function _removePickBar() {
+    ['__pick_bar__', '__pick_style__'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
+  }
+
+  // Resume automatically if this page loaded while a recording is active.
   chrome.storage.local.get(['isRecording'], ({ isRecording: rec }) => {
     if (!rec) return;
     chrome.runtime.sendMessage({ action: 'isRecordingTab' }, (res) => {
       if (chrome.runtime.lastError) return;
-      if (res && res.yes) beginRecording({ fresh: false });
+      if (res && res.yes) beginRecording();
     });
   });
 
@@ -288,7 +396,7 @@ if (!window.__autoRecorderLoaded__) {
   // ─── Messages ───────────────────────────────────────────────────────────────
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'startRecording') {
-      beginRecording({ fresh: true });
+      beginRecording();
       sendResponse({ ok: true });
     } else if (msg.action === 'stopRecording') {
       endRecording();
@@ -302,6 +410,12 @@ if (!window.__autoRecorderLoaded__) {
     } else if (msg.action === 'getPageInfo') {
       sendResponse({ html: getSimplifiedHTML(), url: location.href, title: document.title });
     } else if (msg.action === 'ping') {
+      sendResponse({ ok: true });
+    } else if (msg.action === 'startPicking') {
+      enterPickMode(msg.target);
+      sendResponse({ ok: true });
+    } else if (msg.action === 'cancelPicking') {
+      cancelPickMode();
       sendResponse({ ok: true });
     }
     return true;

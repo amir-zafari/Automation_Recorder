@@ -79,7 +79,7 @@ document.getElementById('stopRecBtn').addEventListener('click', () => {
 
 // ─── Clear Actions ────────────────────────────────────────────────────────────
 document.getElementById('clearActionsBtn').addEventListener('click', () => {
-  chrome.storage.local.set({ recordedActions: [] }, () => {
+  chrome.storage.local.set({ recordedActions: [], recordingBranch: null }, () => {
     refreshActionsList();
     showStatus('recStatus', '🗑 اکشن‌ها پاک شدند', 'info');
   });
@@ -157,6 +157,27 @@ function mkCustomSelect(options, current, onChange, width = '68px') {
   return wrap;
 }
 
+// ─── Module-level state ──────────────────────────────────────────────────────
+let _mainActions = []; // mirror of storage; kept fresh by refreshActionsList
+
+// Scan full action tree (including condition branches) for used {viewN} names.
+function nextViewVar() {
+  const used = new Set();
+  function scan(acts) {
+    (acts || []).forEach(a => {
+      if (a.type === 'view' && a.variable) {
+        const m = a.variable.match(/\{view(\d+)\}/);
+        if (m) used.add(parseInt(m[1]));
+      }
+      if (a.type === 'condition') { scan(a.then); scan(a.else); }
+    });
+  }
+  scan(_mainActions);
+  let i = 1;
+  while (used.has(i)) i++;
+  return `{view${i}}`;
+}
+
 // ─── Action type meta ────────────────────────────────────────────────────────
 const ACTION_TYPES  = ['click','input','keyboard','wait','navigate','manual','view','condition'];
 const ACTION_LABELS = {
@@ -172,19 +193,42 @@ const CONDITION_OPS = [
 
 // ─── Refresh actions list from storage ───────────────────────────────────────
 function refreshActionsList() {
-  chrome.storage.local.get(['recordedActions'], (result) => {
-    const actions = result.recordedActions || [];
-    document.getElementById('actionsCount').textContent = actions.length;
+  chrome.storage.local.get(['recordedActions', 'recordingBranch'], (result) => {
+    _mainActions = result.recordedActions || [];
+    document.getElementById('actionsCount').textContent = _mainActions.length;
     const list = document.getElementById('actionsList');
     const mainSave = (updated) =>
       chrome.storage.local.set({ recordedActions: updated }, refreshActionsList);
-    renderActionsInto(list, actions, mainSave, 0);
+    renderActionsInto(list, _mainActions, mainSave, 0);
+    // Highlight the active recording branch indicator in the list
+    _syncBranchIndicators(result.recordingBranch || null);
   });
 }
 
 // ─── Core recursive renderer ──────────────────────────────────────────────────
 // save(updatedArray) persists changes; nestLevel controls indent/styling.
-function renderActionsInto(container, actions, save, nestLevel) {
+// Build a serializable reference to an action's location in the tree.
+// contextPath: [] for top-level, or e.g. [2,'then'] for inside condition's then.
+function _buildRef(contextPath, idx) {
+  return JSON.stringify([...contextPath, idx]);
+}
+
+// Navigate the action tree using a ref string and call callback(arr, idx).
+function _withRef(actions, ref, cb) {
+  const path = JSON.parse(ref); // e.g. [2] or [2,'then',1]
+  let arr = actions;
+  for (let i = 0; i < path.length - 1; i++) {
+    const p = path[i];
+    arr = arr[p];
+    if (!arr) return;
+  }
+  const idx = path[path.length - 1];
+  cb(arr, idx);
+}
+
+// ─── Core renderer ────────────────────────────────────────────────────────────
+function renderActionsInto(container, actions, save, nestLevel, contextPath) {
+  contextPath = contextPath || [];
   container.innerHTML = '';
 
   if (!actions.length) {
@@ -197,18 +241,15 @@ function renderActionsInto(container, actions, save, nestLevel) {
   container.appendChild(mkInsBtn(0, actions, save));
 
   actions.forEach((action, idx) => {
-    container.appendChild(mkActionRow(action, idx, actions, save, nestLevel));
-
-    // condition: render then/else sub-lists right below the row
+    container.appendChild(mkActionRow(action, idx, actions, save, nestLevel, contextPath));
     if (action.type === 'condition')
-      container.appendChild(mkCondBlocks(action, idx, actions, save, nestLevel));
-
+      container.appendChild(mkCondBlocks(action, idx, actions, save, nestLevel, contextPath));
     container.appendChild(mkInsBtn(idx + 1, actions, save));
   });
 }
 
 // ─── Action row ───────────────────────────────────────────────────────────────
-function mkActionRow(action, idx, actions, save, nestLevel) {
+function mkActionRow(action, idx, actions, save, nestLevel, contextPath) {
   const item = document.createElement('div');
   item.className = nestLevel > 0 ? 'action-item action-item-nested' : 'action-item';
 
@@ -224,9 +265,7 @@ function mkActionRow(action, idx, actions, save, nestLevel) {
     b.addEventListener('click', () => {
       const t = idx + dir;
       if (t < 0 || t >= actions.length) return;
-      const a = [...actions];
-      [a[idx], a[t]] = [a[t], a[idx]];
-      save(a);
+      const a = [...actions]; [a[idx], a[t]] = [a[t], a[idx]]; save(a);
     });
     return b;
   };
@@ -234,7 +273,7 @@ function mkActionRow(action, idx, actions, save, nestLevel) {
   moveWrap.appendChild(mkMv('▼',  1));
   item.appendChild(moveWrap);
 
-  // type selector — custom (native <select> closes Chrome popup)
+  // type selector
   const tSel = mkCustomSelect(
     ACTION_TYPES.map(t => [t, ACTION_LABELS[t] || t]),
     action.type,
@@ -242,7 +281,6 @@ function mkActionRow(action, idx, actions, save, nestLevel) {
   );
   item.appendChild(tSel);
 
-  // description + value (condition uses its own layout)
   if (action.type === 'condition') {
     item.appendChild(mkCondHeader(action, idx, actions, save));
   } else {
@@ -252,21 +290,15 @@ function mkActionRow(action, idx, actions, save, nestLevel) {
     desc.placeholder = 'توضیح';
     desc.title = action.xpath || '';
     desc.addEventListener('change', () => {
-      const a = [...actions];
-      a[idx] = { ...a[idx], description: desc.value };
-      save(a);
+      const a = [...actions]; a[idx] = { ...a[idx], description: desc.value }; save(a);
     });
     item.appendChild(desc);
-
-    const val = mkValueArea(action, idx, actions, save);
+    const val = mkValueArea(action, idx, actions, save, contextPath);
     if (val) item.appendChild(val);
   }
 
-  // delete
   const del = document.createElement('button');
-  del.className = 'del-btn';
-  del.textContent = '×';
-  del.title = 'حذف';
+  del.className = 'del-btn'; del.textContent = '×'; del.title = 'حذف';
   del.addEventListener('click', () => save(actions.filter((_, i) => i !== idx)));
   item.appendChild(del);
 
@@ -274,11 +306,10 @@ function mkActionRow(action, idx, actions, save, nestLevel) {
 }
 
 // ─── Value widget per type ────────────────────────────────────────────────────
-function mkValueArea(action, idx, actions, save) {
+function mkValueArea(action, idx, actions, save, contextPath) {
+  contextPath = contextPath || [];
   const upd = (field, val) => {
-    const a = [...actions];
-    a[idx] = { ...a[idx], [field]: val };
-    save(a);
+    const a = [...actions]; a[idx] = { ...a[idx], [field]: val }; save(a);
   };
   const inp = (field, placeholder, style) => {
     const el = document.createElement('input');
@@ -307,12 +338,32 @@ function mkValueArea(action, idx, actions, save) {
     el.title = 'Enter | Tab | Escape | F1…';
     return el;
   }
-  if (t === 'input' || t === 'click')
-    return inp('value', t === 'click' ? 'متن (اختیاری)' : '{1} یا متن');
+  if (t === 'input' || t === 'click') {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;align-items:center;gap:3px;flex:1;min-width:0;';
+    // No xpath yet → show element-picker button
+    if (!action.xpath) {
+      const ref = _buildRef(contextPath, idx);
+      const pickBtn = document.createElement('button');
+      pickBtn.type = 'button';
+      pickBtn.className = 'pick-btn';
+      pickBtn.title = t === 'click' ? 'انتخاب عنصر از صفحه' : 'انتخاب فیلد از صفحه';
+      pickBtn.textContent = '⊙';
+      pickBtn.dataset.pickRef = ref;
+      pickBtn.dataset.pickType = t;
+      pickBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        activatePicker(ref, t, pickBtn);
+      });
+      wrap.appendChild(pickBtn);
+    }
+    wrap.appendChild(inp('value', t === 'click' ? 'متن (اختیاری)' : '{1} یا متن'));
+    return wrap;
+  }
   if (t === 'view') {
     const el = inp('variable', '{view1}', { width: '82px' });
     el.value = action.variable || '{view1}';
-    el.title = 'نام متغیر — در شرط‌ها استفاده می‌شود';
+    el.title = 'نام متغیر — در شرط‌ها قابل استفاده';
     return el;
   }
   if (t === 'manual') {
@@ -324,42 +375,33 @@ function mkValueArea(action, idx, actions, save) {
   return null;
 }
 
-// ─── Condition header (inline if/op/value row) ────────────────────────────────
+// ─── Condition header ─────────────────────────────────────────────────────────
 function mkCondHeader(action, idx, actions, save) {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'display:flex;align-items:center;gap:3px;flex:1;min-width:0;flex-wrap:wrap;';
-
   const lbl = document.createElement('span');
   lbl.style.cssText = 'color:#f9ca24;font-size:10px;white-space:nowrap;flex-shrink:0;';
   lbl.textContent = 'اگر:';
   wrap.appendChild(lbl);
-
   const mkCI = (field, ph, w) => {
     const el = document.createElement('input');
-    el.className = 'action-value-input';
-    el.style.width = w; el.value = action[field] || ''; el.placeholder = ph;
+    el.className = 'action-value-input'; el.style.width = w;
+    el.value = action[field] || ''; el.placeholder = ph;
     el.addEventListener('change', () => {
       const a = [...actions]; a[idx] = { ...a[idx], [field]: el.value }; save(a);
     });
     return el;
   };
-
   wrap.appendChild(mkCI('left', '{view1}', '68px'));
-
-  const opSel = mkCustomSelect(
-    CONDITION_OPS,
-    action.operator || '==',
-    (newOp) => { const a = [...actions]; a[idx] = { ...a[idx], operator: newOp }; save(a); },
-    '100px'
-  );
-  wrap.appendChild(opSel);
-
+  wrap.appendChild(mkCustomSelect(CONDITION_OPS, action.operator || '==',
+    (v) => { const a = [...actions]; a[idx] = { ...a[idx], operator: v }; save(a); }, '100px'));
   wrap.appendChild(mkCI('right', 'مقدار', '68px'));
   return wrap;
 }
 
-// ─── Condition then/else expandable sub-lists ─────────────────────────────────
-function mkCondBlocks(action, idx, actions, save, nestLevel) {
+// ─── Condition then/else expandable + branch-record ──────────────────────────
+function mkCondBlocks(action, idx, actions, save, nestLevel, contextPath) {
+  contextPath = contextPath || [];
   const outer = document.createElement('div');
   outer.className = 'cond-blocks';
 
@@ -367,48 +409,67 @@ function mkCondBlocks(action, idx, actions, save, nestLevel) {
     const isElse   = branch === 'else';
     const color    = isElse ? '#e94560' : '#2ecc71';
     const labelTxt = isElse ? 'وگرنه' : 'آنگاه';
+    const branchCtx = [...contextPath, idx, branch]; // path to items inside this branch
 
     const block = document.createElement('div');
     block.className = 'cond-branch';
 
     const subActs = action[branch] || [];
 
+    // Header row: [toggle expand] [⏺ ضبط اینجا]
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;gap:4px;';
+
     const toggle = document.createElement('button');
     toggle.className = 'expand-btn';
-    toggle.style.color = color;
-    toggle.style.borderColor = color + '55';
+    toggle.style.cssText = `color:${color};border-color:${color}55;flex:1;text-align:right;`;
+
+    // Record-into-branch button
+    const recBtn = document.createElement('button');
+    recBtn.type = 'button';
+    recBtn.className = 'branch-rec-btn';
+    recBtn.style.color = color;
+    recBtn.dataset.condIdx = idx;
+    recBtn.dataset.branch = branch;
+    recBtn.title = `ضبط در بخش "${labelTxt}"`;
+    recBtn.textContent = '⏺';
 
     const subWrap = document.createElement('div');
     subWrap.className = 'cond-sub';
     subWrap.style.display = 'none';
 
     const makeSave = () => (updatedSub) => {
-      const a = [...actions];
-      a[idx] = { ...a[idx], [branch]: updatedSub };
-      save(a);                                  // persists to storage & re-renders parent
+      const a = [...actions]; a[idx] = { ...a[idx], [branch]: updatedSub }; save(a);
     };
 
-    const refreshToggleLabel = (count) => {
+    const refreshLabel = (count, isRecording) => {
       const open = subWrap.style.display !== 'none';
-      toggle.textContent = `${open ? '▼' : '▶'} ${labelTxt} (${count} اکشن)`;
+      toggle.textContent = `${open ? '▼' : '▶'} ${labelTxt} (${count} اکشن)${isRecording ? ' ⏺' : ''}`;
     };
 
-    // Initial render
-    renderActionsInto(subWrap, subActs, makeSave(), nestLevel + 1);
-    refreshToggleLabel(subActs.length);
+    renderActionsInto(subWrap, subActs, makeSave(), nestLevel + 1, branchCtx);
+    refreshLabel(subActs.length, false);
 
     toggle.addEventListener('click', () => {
       const nowOpen = subWrap.style.display !== 'none';
       subWrap.style.display = nowOpen ? 'none' : 'block';
-      // count current sub-actions from saved data
-      chrome.storage.local.get(['recordedActions'], (r) => {
-        const root = r.recordedActions || [];
-        const cur  = (root[idx] || {})[branch] || [];
-        refreshToggleLabel(cur.length);
+      chrome.storage.local.get(['recordedActions', 'recordingBranch'], (r) => {
+        const cur = ((r.recordedActions || [])[idx] || {})[branch] || [];
+        const rb = r.recordingBranch;
+        const isRec = rb && rb.condIdx === idx && rb.branch === branch;
+        refreshLabel(cur.length, isRec);
+        if (!nowOpen) renderActionsInto(subWrap, cur, makeSave(), nestLevel + 1, branchCtx);
       });
     });
 
-    block.appendChild(toggle);
+    recBtn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      toggleBranchRecording(idx, branch, recBtn, refreshLabel);
+    });
+
+    hdr.appendChild(toggle);
+    hdr.appendChild(recBtn);
+    block.appendChild(hdr);
     block.appendChild(subWrap);
     outer.appendChild(block);
   });
@@ -432,6 +493,89 @@ function mkInsBtn(atIdx, actions, save) {
   return row;
 }
 
+// ─── Branch recording ─────────────────────────────────────────────────────────
+// Toggle recording into a specific condition branch (then/else).
+function toggleBranchRecording(condIdx, branch, recBtn, refreshLabel) {
+  chrome.storage.local.get(['isRecording', 'recordingBranch'], (r) => {
+    const rb       = r.recordingBranch;
+    const isCurrent = rb && rb.condIdx === condIdx && rb.branch === branch;
+
+    if (isCurrent) {
+      // Un-target this branch → back to recording into main list
+      chrome.storage.local.set({ recordingBranch: null }, refreshActionsList);
+    } else {
+      const doSet = () => {
+        chrome.storage.local.set(
+          { recordingBranch: { condIdx, branch } },
+          refreshActionsList
+        );
+      };
+      if (r.isRecording) {
+        doSet();
+      } else {
+        // Start recording first, then set branch
+        chrome.runtime.sendMessage({ action: 'startRecording' }, (res) => {
+          if (res?.ok) {
+            isRecording = true;
+            document.getElementById('startRecBtn').disabled = true;
+            document.getElementById('stopRecBtn').disabled = false;
+            showStatus('recStatus', '⏺ در حال ضبط...', 'info');
+            startPolling();
+            doSet();
+          }
+        });
+      }
+    }
+  });
+}
+
+// Highlight branch record buttons based on current recordingBranch state.
+function _syncBranchIndicators(rb) {
+  document.querySelectorAll('.branch-rec-btn').forEach(btn => {
+    const ci = parseInt(btn.dataset.condIdx);
+    const br = btn.dataset.branch;
+    const active = rb && rb.condIdx === ci && rb.branch === br;
+    btn.style.fontWeight   = active ? 'bold' : 'normal';
+    btn.style.background   = active ? '#e9456022' : 'transparent';
+    btn.textContent        = active ? '⏹' : '⏺';
+    btn.title              = active ? 'توقف ضبط در این بخش' : `ضبط در بخش "${br === 'then' ? 'آنگاه' : 'وگرنه'}"`;
+  });
+}
+
+// ─── Element picker ───────────────────────────────────────────────────────────
+// ref   : JSON ref string from _buildRef (identifies which action to update)
+// type  : 'click' | 'input'
+// btn   : the ⊙ button element (for visual feedback)
+function activatePicker(ref, type, btn) {
+  if (btn) {
+    btn.textContent = '⏳';
+    btn.disabled = true;
+  }
+  chrome.storage.local.set({ pickTarget: { ref, type } });
+  chrome.runtime.sendMessage({ action: 'activatePicker', target: { ref, type } }, (res) => {
+    if (!res?.ok) {
+      if (btn) { btn.textContent = '⊙'; btn.disabled = false; }
+      showStatus('recStatus', '❌ خطا در فعال کردن picker', 'err');
+    }
+    // On success: popup will likely close when user switches to page.
+    // Storage listener handles the result when popup reopens.
+  });
+}
+
+// Apply a pickResult from storage (called when popup receives the storage event).
+function applyPickResult(result) {
+  if (!result || !result.ref) return;
+  chrome.storage.local.get(['recordedActions'], (r) => {
+    const actions = r.recordedActions || [];
+    _withRef(actions, result.ref, (arr, idx) => {
+      if (!arr[idx]) return;
+      arr[idx] = { ...arr[idx], ...result.captured };
+      chrome.storage.local.set({ recordedActions: actions, pickTarget: null, pickResult: null },
+        refreshActionsList);
+    });
+  });
+}
+
 // ─── Type change defaults ─────────────────────────────────────────────────────
 function applyTypeChange(old, newType) {
   const u = { type: newType, xpath: old.xpath || '', description: old.description || '' };
@@ -440,7 +584,7 @@ function applyTypeChange(old, newType) {
   if (newType === 'navigate')  u.url      = old.url      || '';
   if (newType === 'input' || newType === 'click') u.value = old.value || '';
   if (newType === 'manual')    u.value    = '{ASK}';
-  if (newType === 'view')      u.variable = old.variable || '{view1}';
+  if (newType === 'view')      u.variable = old.variable || nextViewVar();
   if (newType === 'condition') {
     u.left = old.left || ''; u.operator = old.operator || '=='; u.right = old.right || '';
     u.then = old.then || []; u.else = old.else || [];
@@ -672,13 +816,27 @@ async function exportRecipe(actions) {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 refreshActionsList();
 
-// Restore recording state if popup was closed and reopened mid-recording
-chrome.storage.local.get(['isRecording'], ({ isRecording: rec }) => {
-  if (rec) {
+// Restore recording state + check for pending pick results on popup open
+chrome.storage.local.get(['isRecording', 'pickResult'], (r) => {
+  if (r.isRecording) {
     isRecording = true;
     document.getElementById('startRecBtn').disabled = true;
     document.getElementById('stopRecBtn').disabled = false;
     showStatus('recStatus', '⏺ در حال ضبط... روی عناصر صفحه کلیک کنید', 'info');
     startPolling();
+  }
+  if (r.pickResult) {
+    applyPickResult(r.pickResult);
+  }
+});
+
+// Live listener: apply pick results as soon as content.js stores them
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.pickResult?.newValue) {
+    applyPickResult(changes.pickResult.newValue);
+  }
+  if (changes.recordingBranch) {
+    _syncBranchIndicators(changes.recordingBranch.newValue || null);
   }
 });
